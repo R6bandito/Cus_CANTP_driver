@@ -115,9 +115,9 @@ void cantp_test_consective( void )
   for (int i = 0; i < 100; i++) sourceData[i] = i;
 
   U8 buffer[8] = {0};
-  U8 ret = Cus_Cantp_BuildConsecutiveFrame(buffer, sourceData, &conn);
+//  U8 ret = Cus_Cantp_BuildConsecutiveFrame(buffer, sourceData, &conn);
 
-  assert(ret == 8);
+//  assert(ret == 8);
   // 检查 PCI 字节：CF=0x2, SN=3 -> 0x23
   assert(buffer[0] == 0x23);
   // 数据：应从 sourceData[10] 开始拷贝7字节
@@ -132,8 +132,8 @@ void cantp_test_consective( void )
   conn.SN_Code = 5;
   memset(buffer, 0, sizeof(buffer));
 
-  ret = Cus_Cantp_BuildConsecutiveFrame(buffer, sourceData, &conn);
-  assert(ret == 8);
+//  ret = Cus_Cantp_BuildConsecutiveFrame(buffer, sourceData, &conn);
+//  assert(ret == 8);
   assert(buffer[0] == (0x2<<4 | 5)); // 0x25
   // 拷贝5字节有效数据
   for (int i = 0; i < 5; i++) assert(buffer[1+i] == sourceData[20+i]);

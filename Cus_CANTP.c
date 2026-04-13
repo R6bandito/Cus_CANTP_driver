@@ -6,6 +6,7 @@ static Cus_CANTp_Conn_t ConnPool[MAX_SUPPORT_CONN];
   Cus_CANTp_Conn_t *Cus_Cantp_GetIdleConn( void );
   void Cus_Cantp_ReleaseConn( Cus_CANTp_Conn_t *pConn );
   void Cus_Cantp_HeartTick( void );
+  void Cus_Cantp_MainFunction( void );
   void Cus_Cantp_TxConfirmation( void *CanDevice, U8 mailbox );
   U32 Cus_Cantp_GetCanID( const Cus_CANTP_Cfg_t *pCfg );
   U32 Cus_Cantp_GetDataLengthFromFF( const U8 *frame );
@@ -23,6 +24,7 @@ static Cus_CANTp_Conn_t ConnPool[MAX_SUPPORT_CONN];
 
   static void __cus_initial_Conn( Cus_CANTp_Conn_t *pConn );
   static void __cus_reset_conn_rx_state(Cus_CANTp_Conn_t *pConn);
+  static void __cus_reset_conn_tx_state(Cus_CANTp_Conn_t *pConn);
   static void Cus_Cantp_RxIndication( Cus_CANTp_Conn_t *pConn, U32 canId, const U8 *data, U8 dlc );
   static U8 Cus_Cantp_VerifyIDConn(Cus_CANTp_Conn_t *pConn, U32 canId, const U8 *data);
   static void Cus_Cantp_ProcessSF(Cus_CANTp_Conn_t *pConn, const U8 *data, U8 dlc);
@@ -88,6 +90,70 @@ void Cus_Cantp_HeartTick( void )
 }
 
 
+void Cus_Cantp_MainFunction( void )
+{
+  for( U8 i = 0; i < MAX_SUPPORT_CONN; i++ )
+  {
+    Cus_CANTp_Conn_t *pConn = &ConnPool[i];
+    if ( pConn->CurrentState == CONN_IDLE )   continue;
+
+    if ( pConn->Timer_N_Bs == 0 && pConn->CurrentState == CONN_TX_WAIT_FC )
+    {
+      // 等待流控帧超时.
+      if ( pConn->ErrCallBack != NULL )
+      {
+        // 上层注册了错误回调.调用用户错误处理逻辑.
+        // Ps: 上层错误处理回调中，pConn状态由上层管理！底层将不负责释放和状态抹除.
+        pConn->ErrCallBack(pConn, CUS_CANTP_ERR_NBS_TIMEOUT);  continue;
+      }
+      else if ( pConn->ErrCallBack == NULL )
+      {
+        // 未注册上层错误回调.释放控制块.
+        Cus_Cantp_ReleaseConn(pConn);   continue;
+      }
+    }
+
+    if ( pConn->Timer_N_Cr == 0 && ((pConn->CurrentState == CONN_RX_WAIT_CF) || (pConn->CurrentState == CONN_RX_CF)) )
+    {
+      // （作为接收方）等待发送方连续帧超时.
+      if ( pConn->ErrCallBack != NULL )
+      {
+        pConn->ErrCallBack(pConn, CUS_CANTP_ERR_NCR_TIMEOUT);   continue;
+      }
+      else if ( pConn->ErrCallBack == NULL )
+      {
+        Cus_Cantp_ReleaseConn(pConn);   continue;
+      }
+    }
+
+    if ( pConn->Timer_N_As == 0 )
+    {
+      // 发送确认超时检测
+      if ( (pConn->CurrentState == CONN_TX_FF || pConn->CurrentState == CONN_TX_SF) ||
+      (pConn->CurrentState == CONN_TX_CF && pConn->Timer_StminDelayOnly == 0) )
+      {
+        if ( pConn->ErrCallBack != NULL ) pConn->ErrCallBack(pConn, CUS_CANTP_ERR_NAS_TIMEOUT);
+        else Cus_Cantp_ReleaseConn(pConn);
+        continue;
+      }
+    }
+
+    if ( pConn->Timer_N_Ar == 0 && pConn->CurrentState == CONN_TX_FC )
+    {
+      if ( pConn->ErrCallBack != NULL ) pConn->ErrCallBack(pConn, CUS_CANTP_ERR_NAS_TIMEOUT);
+      else Cus_Cantp_ReleaseConn(pConn);
+      continue;
+    }
+
+    // STmin 延时结束，发送下一帧 CF
+    if (pConn->Timer_StminDelayOnly == 0 && pConn->CurrentState == CONN_TX_CF) 
+    {
+      Cus_Cantp_SendNextCF(pConn);
+    }
+  }
+}
+
+
 U8 Cus_Cantp_SendFirstFrame( Cus_CANTp_Conn_t *pConn, const U8 *data, U32 total_len )
 {
   if ( !pConn || !data || total_len == 0 || 
@@ -116,6 +182,7 @@ U8 Cus_Cantp_SendFirstFrame( Cus_CANTp_Conn_t *pConn, const U8 *data, U32 total_
     pConn->CurrentState = CONN_IDLE;
     return 0;
   }
+  pConn->Timer_N_As = TIMER_NAS;   // 启动发送确认超时
 
   U8 FF_payload = 0;
   if ( pCfg->TxDLC == 8 && total_len <= 4095 )  
@@ -168,6 +235,7 @@ U8 Cus_Cantp_SendSingleFrame( Cus_CANTp_Conn_t *pConn, const U8 *data, U8 len )
     pConn->CurrentState = CONN_TX_SF;      // 状态变化为发送单帧. 等待确认.
     return 1;
   }
+  pConn->Timer_N_As = TIMER_NAS;   // 启动发送确认超时
 
   return 0;
 }
@@ -192,13 +260,13 @@ U8 Cus_Cantp_SendFlowControlFrame( Cus_CANTp_Conn_t *pConn, Cus_CANTP_FlowState_
 
   if ( pConn->SendFunc && pConn->SendFunc(pConn, Canid, Buffer, ret_dlc) != 0 )
   {
-    // 发送完成.
+    // 发送请求提交完成.
     if ( fs == FLOW_CTS )
     {
       // 更新状态. 启动N_Cr定时器.
-      pConn->CurrentState = CONN_RX_WAIT_CF;
+      pConn->CurrentState = CONN_TX_FC;
       pConn->RemainingBS = pConn->BS;
-      pConn->Timer_N_Cr = TIMER_NCR;
+      pConn->Timer_N_As = TIMER_NAS;   // 启动发送确认超时
     }
     else if ( fs == FLOW_OVFLW || fs == FLOW_WAIT )
     {
@@ -248,7 +316,10 @@ U8 Cus_Cantp_SendNextCF( Cus_CANTp_Conn_t *pConn )
 
   if ( pConn->SendFunc && pConn->SendFunc(pConn, canID, buffer, dlc) )
   {
-    // 更新发送状态.
+    pConn->Timer_N_As = TIMER_NAS;   // 启动发送确认超时
+    // 更新发送状态.  
+    // Ps: 此处是提交发送后直接进行状态更新,而并非是等底层硬件发送成功. 因此必须保证 用户自身注册的SendFunc在无邮箱可用时立即返回失败(或有对应重试机制)，而不应等待邮箱变空.
+    #warning "SendFunc must return failure immediately when no Tx mailbox available.do NOT block waiting."
     pConn->TxBytes +=  copylen;
     pConn->TxPos += copylen;
     pConn->Remaining -= copylen;
@@ -257,7 +328,7 @@ U8 Cus_Cantp_SendNextCF( Cus_CANTp_Conn_t *pConn )
 
     if ( pConn->Remaining > 0 && (pConn->BS == 0 || pConn->RemainingBS > 0) )
     {
-      // 还有数据且未达到块限制. 开启Stmin定时器.
+      // 还有数据且未达到块限制. 开启Stmin定时器.开启 N_As 定时器.
       if ( pConn->STmin > 0 )
       {
         pConn->Timer_StminDelayOnly = Cus_Cantp_StminConverted(pConn->STmin);
@@ -776,7 +847,7 @@ static void Cus_Cantp_ProcessCF(Cus_CANTp_Conn_t *pConn, const U8 *data, U8 dlc)
   }
 
   // SN校验成功. 接收该帧数据.
-  U8 *pData = &data[pciOffset];
+  const U8 *pData = &data[pciOffset];
   U8 data_len = 8 - pciOffset;    // 除去PCI（可能的TA）后,剩余数据段大小.
   U8 copylen = ( pConn->Remaining <= data_len ) ? (pConn->Remaining) : data_len;
   memcpy(&pConn->pRecvBuffer[pConn->RxPos], pData, copylen);
@@ -872,7 +943,7 @@ U8 Cus_Cantp_RecieveFrame( const U8 *data, U8 dlc, U32 canid )
   {
     Cus_CANTp_Conn_t *pConn = &ConnPool[i];
     Cus_CANTP_Cfg_t *pCfg = Cus_Cantp_GetChannel(pConn->ChannelConfigTabID);
-    if ( !pCfg )  return handled;
+    if ( !pCfg )  continue;
 
     if ( pConn->ConnIndex < 0 )   continue;     // 该连接控制块为未分配状态.
 
@@ -926,34 +997,50 @@ void Cus_Cantp_TxConfirmation( void *CanDevice, U8 mailbox )
 
           // 启动 N_Bs定时器.
           pConn->Timer_N_Bs = TIMER_NBS;
+
+          pConn->Timer_N_As = 0;  // 发送已经确认，不需要再等待超时. 直接清0
           break;
         }
 
       case CONN_TX_CF:
-      {
-        if ( pConn->Remaining == 0 )  pConn->CurrentState = CONN_IDLE;  // 数据发完. 结束掉此次会话.
-
-        // 连续帧发送成功. 发送成功相关数据状态由发送API本地更新. 此处不做更新，仅作状态转换.
-        if ( pConn->BS > 0 && pConn->RemainingBS == 0 )
         {
-          // 已成功发完一个BS块. 等待下一个流控.
-          pConn->CurrentState = CONN_TX_WAIT_FC;
+          // 连续帧发送成功. 发送成功相关数据状态由发送API本地更新. 此处不做更新，仅作状态转换.
+          if ( pConn->Remaining == 0 )  pConn->CurrentState = CONN_IDLE;  // 数据发完. 结束掉此次会话.
 
-          // 启动 N_Bs定时器.
-          pConn->Timer_N_Bs = TIMER_NBS;
+          if ( pConn->BS > 0 && pConn->RemainingBS == 0 )
+          {
+            // 已成功发完一个BS块. 等待下一个流控.
+            pConn->CurrentState = CONN_TX_WAIT_FC;
+
+            // 启动 N_Bs定时器.
+            pConn->Timer_N_Bs = TIMER_NBS;
+
+            pConn->Timer_N_As = 0;
+          }
+          else 
+          {
+            // 当前BS块还有盈余. 但是STmin 延时已经在 SendNextCF 中处理. 此处仅确认发送成功，无额外操作. 等待触发下一次发送.
+            pConn->Timer_N_As = 0;
+          }
+          break;
         }
-        else 
-        {
-          // 当前BS块还有盈余. 但是STmin 延时已经在 SendNextCF 中处理. 此处不做额外操作. 等待触发下一次发送.
-        }
-        break;
-      }
 
       case CONN_TX_SF:
-      {
-        // 单帧发送成功. 单帧直接结束会话即可.(IDLE通信状态)
-        pConn->CurrentState = CONN_IDLE;
-      }
+        {
+          // 单帧发送成功. 单帧直接结束会话即可.(IDLE通信状态)
+          pConn->Timer_N_As = 0;
+          pConn->CurrentState = CONN_IDLE;
+        }
+
+      case CONN_TX_FC:
+        {
+          // 流控帧确认发送成功. 改变状态为 CONN_RX_WAIT_CF. 等待发送方的后续连续帧.
+          pConn->CurrentState = CONN_RX_WAIT_CF;
+          pConn->Timer_N_As = 0;
+          pConn->Timer_N_Cr = TIMER_NCR;      // 启动NCR. 在 CONN_RX_WAIT_CF 状态下 等待CF.
+          break;
+        }
+
       default:    return;
       }
     }
@@ -990,6 +1077,7 @@ static void __cus_initial_Conn( Cus_CANTp_Conn_t *pConn )
   pConn->ChannelConfigTabID = 0;
   pConn->SendFunc = NULL;
   pConn->RecvFunc = NULL;
+  pConn->ErrCallBack = NULL;
   pConn->DataIndFunc = NULL;
   pConn->TxPos = 0;
   pConn->TxMailBoxIndex = 0xFF;
@@ -1011,5 +1099,23 @@ static void __cus_reset_conn_rx_state(Cus_CANTp_Conn_t *pConn)
   pConn->SN_Code = 0;
   pConn->Timer_N_Ar = 0;
   pConn->Timer_N_Cr = 0;
+}
+
+/* 发送方通信信息状态重置API */
+static void __cus_reset_conn_tx_state(Cus_CANTp_Conn_t *pConn)
+{
+  if ( !pConn )   return;
+
+  pConn->TxBytes = 0;
+  pConn->pSendData = NULL;
+  pConn->TxMailBoxIndex = 0xFF;
+  pConn->RemainingBS = 0;
+  pConn->SN_Code = 0;
+  pConn->TxPos = 0;
+  pConn->Timer_N_As = 0;
+  pConn->Timer_N_Bs = 0;
+  pConn->Timer_StminDelayOnly = 0;
+  pConn->STmin = 0;
+  pConn->BS = 0;
 }
 

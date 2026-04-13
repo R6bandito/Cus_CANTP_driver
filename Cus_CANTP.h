@@ -22,6 +22,7 @@ typedef struct Cus_CANTP_Conn Cus_CANTp_Conn_t;
   typedef U8 (*Cus_CanTP_CanSendFunc)( Cus_CANTp_Conn_t *pConn, U32 canId, const U8* data, U16 dlc );
   typedef U8 (*Cus_CanTP_CanRecvFunc)( Cus_CANTp_Conn_t *pConn, U32 *pcanId, U8 *pData, U8 *pDlc );
   typedef void (*Cus_CanTP_DataIndication)( Cus_CANTp_Conn_t *pConn, const U8 *data, U32 len );
+  typedef void (*Cus_CanTP_ErrCallback)( Cus_CANTp_Conn_t *pConn, U8 errcode );
 
   #ifndef NULL
     #define NULL ((void *)0)
@@ -49,10 +50,11 @@ typedef enum
   // 空闲状态.
   CONN_IDLE = 0,
 
-  CONN_TX_SF,     // 发送单帧. 等待确认.
-  CONN_TX_FF,     // 发送首帧. 等待确认.
-  CONN_TX_CF,     // 发送连续帧. 等待确认.
+  CONN_TX_SF,     // 发送单帧. 
+  CONN_TX_FF,     // 发送首帧. 
+  CONN_TX_CF,     // 发送连续帧. 
   CONN_TX_WAIT_FC,  // 等待流控帧.
+  CONN_TX_FC,     // 发送流控.
 
   CONN_RX_FF,       // 接收首帧. 预备发送流控.
   CONN_RX_CF,       // 正在接收连续帧.
@@ -60,6 +62,19 @@ typedef enum
   CONN_RX_SF
 
 } Cus_CANTP_State_t;
+
+
+typedef enum {
+  CUS_CANTP_ERR_NBS_TIMEOUT,      // 等待流控超时 (发送方)
+  CUS_CANTP_ERR_NCR_TIMEOUT,      // 等待连续帧超时 (接收方)
+  CUS_CANTP_ERR_NAS_TIMEOUT,
+  CUS_CANTP_ERR_FLOW_OVFLW,       // 收到 OVFLW 流控帧
+  CUS_CANTP_ERR_FLOW_WAIT,        // 收到 WAIT 流控帧
+  CUS_CANTP_ERR_SN_MISMATCH,      // SN 校验失败
+  CUS_CANTP_ERR_TX_FAILED,        // 发送失败（重试耗尽）
+  CUS_CANTP_ERR_RX_BUFFER_FULL,   // 接收缓冲区不足
+
+} Cus_CANTP_ErrCode_t;
 
 
 typedef enum 
@@ -107,13 +122,14 @@ struct Cus_CANTP_Conn
   Cus_CanTP_CanSendFunc SendFunc;         // 底层 CAN 帧发送.(自实现).异步
   Cus_CanTP_CanRecvFunc RecvFunc;         // 底层 CAN 帧接收.
   Cus_CanTP_DataIndication DataIndFunc;   // 上层数据通知回调.
+  Cus_CanTP_ErrCallback ErrCallBack;      // 上层错误通知回调.
 
 };
 
 
 /*  ---------------------------------------------------  */
 void Cus_Cantp_HeartTick( void );
-
+void Cus_Cantp_MainFunction( void );
 /*  ---------------------------------------------------  */
 
 /*  ---------------------------------------------------  */
