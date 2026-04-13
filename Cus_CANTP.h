@@ -77,6 +77,7 @@ struct Cus_CANTP_Conn
   Cus_CANTP_State_t CurrentState;     // 当前状态.
 
   U32 TxBytes;              // 已经发送的数据(字节).
+  const U8 *pSendData;      // 待发送的原始数据.
   U32 RxBytes;              // 已接收到的数据(字节).
   U8 SN_Code;               // SN序列码.
   U32 TotalSize;            // 该此会话 数据总长度.
@@ -119,6 +120,7 @@ void Cus_Cantp_HeartTick( void );
   Cus_CANTp_Conn_t *Cus_Cantp_GetIdleConn( void );
   void Cus_Cantp_ReleaseConn( Cus_CANTp_Conn_t *pConn );
   void Cus_Cantp_ModuleInit( void );
+  void Cus_Cantp_TxConfirmation( void *CanDevice, U8 mailbox );
   U8 Cus_Cantp_RecieveFrame( const U8 *data, U8 dlc, U32 canid );   // 上层喂帧总API.
   U32 Cus_Cantp_GetCanID( const Cus_CANTP_Cfg_t *pCfg );   // 得到实际发送的 CAN ID.
   U32 Cus_Cantp_GetDataLengthFromFF( const U8 *frame );
@@ -126,10 +128,11 @@ void Cus_Cantp_HeartTick( void );
   U8 Cus_Cantp_SendFirstFrame( Cus_CANTp_Conn_t *pConn, const U8 *data, U32 total_len );    // 发送FF帧.
   U8 Cus_Cantp_SendSingleFrame( Cus_CANTp_Conn_t *pConn, const U8 *data, U8 len );          // 发送SF帧.
   U8 Cus_Cantp_SendFlowControlFrame( Cus_CANTp_Conn_t *pConn, Cus_CANTP_FlowState_t fs );   // 发送FC帧.
+  U8 Cus_Cantp_SendNextCF( Cus_CANTp_Conn_t *pConn );     // 发送一帧 CF 帧.
 
   U8 Cus_Cantp_BuildSingleFrame( U8 *Buffer, const U8 *data, U8 len, U8 ChannelTabID );   // SF帧组装.
   U8 Cus_Cantp_BuildFirstFrame( U8 *Buffer, const U8 *data, U32 total_len, U8 ChannelTabID );   // FF帧组装.
-  U8 Cus_Cantp_BuildConsecutiveFrame( U8 *Buffer, const U8 *data, Cus_CANTp_Conn_t *pConn );    // CF帧组装.
+  U8 Cus_Cantp_BuildConsecutiveFrame( U8 *Buffer, const U8 *data, Cus_CANTp_Conn_t *pConn, U8 *pCopylen );    // CF帧组装.
   U8 Cus_Cantp_BuildFlowControlFrame( U8 *Buffer, Cus_CANTP_FlowState_t flow_State, Cus_CANTp_Conn_t *pConn );  // FC帧组装.
 /*  ---------------------------------------------------  */
 
