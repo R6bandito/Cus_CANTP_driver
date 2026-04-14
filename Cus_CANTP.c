@@ -11,6 +11,7 @@ static Cus_CANTp_Conn_t ConnPool[MAX_SUPPORT_CONN];
   U32 Cus_Cantp_GetCanID( const Cus_CANTP_Cfg_t *pCfg );
   U32 Cus_Cantp_GetDataLengthFromFF( const U8 *frame );
   U8 Cus_Cantp_RecieveFrame( const U8 *data, U8 dlc, U32 canid );
+  U8 Cus_Cantp_Transmit( U8 channelTabID, U8 ConnIndex, const U8 *data, U32 len, void *canDevice );
 
   U8 Cus_Cantp_SendFirstFrame( Cus_CANTp_Conn_t *pConn, const U8 *data, U32 total_len );
   U8 Cus_Cantp_SendSingleFrame( Cus_CANTp_Conn_t *pConn, const U8 *data, U8 len );
@@ -22,10 +23,17 @@ static Cus_CANTp_Conn_t ConnPool[MAX_SUPPORT_CONN];
   U8 Cus_Cantp_BuildConsecutiveFrame( U8 *Buffer, const U8 *data, Cus_CANTp_Conn_t *pConn, U8 *pCopylen );
   U8 Cus_Cantp_BuildFlowControlFrame( U8 *Buffer, Cus_CANTP_FlowState_t flow_State, Cus_CANTp_Conn_t *pConn );
 
+  U8 Cus_Cantp_Register_Func_Callback( Cus_CanTP_CanSendFunc SendFunc, Cus_CanTP_DataIndication dataIntFunc, Cus_CanTP_ErrCallback errCallback );
+  U8 Cus_Cantp_Register_RecvBuffer( U8 *buffer, U32 buffer_Size, U8 ConnIndex );
+
+  void Cus_Cantp_Config_ChannelNAI_Info( U8 targetAddr, U8 senderAddr, U8 targetAddr_Type, U8 AE, U8 ChannelIndex );
+  void Cus_Cantp_Config_ChannelMain_Info( U8 addrMode, U8 TxDlc, U32 Function_CanID, U8 ChannelIndex );
+
   static void __cus_initial_Conn( Cus_CANTp_Conn_t *pConn );
   static void __cus_reset_conn_rx_state(Cus_CANTp_Conn_t *pConn);
   static void __cus_reset_conn_tx_state(Cus_CANTp_Conn_t *pConn);
   static void Cus_Cantp_RxIndication( Cus_CANTp_Conn_t *pConn, U32 canId, const U8 *data, U8 dlc );
+  static U16 Cus_Cantp_StminConverted( const U8 Stmin );
   static U8 Cus_Cantp_VerifyIDConn(Cus_CANTp_Conn_t *pConn, U32 canId, const U8 *data);
   static void Cus_Cantp_ProcessSF(Cus_CANTp_Conn_t *pConn, const U8 *data, U8 dlc);
   static void Cus_Cantp_ProcessFF(Cus_CANTp_Conn_t *pConn, const U8 *data, U8 dlc);
@@ -49,8 +57,7 @@ Cus_CANTp_Conn_t *Cus_Cantp_GetIdleConn( void )
   for( U8 i = 0; i < MAX_SUPPORT_CONN; i++ )
   {
     if ( ConnPool[i].ConnIndex == -1 && ConnPool[i].CurrentState == CONN_IDLE )    // 找到空闲块. 返回地址.
-    {
-      memset(&ConnPool[i], 0, sizeof(Cus_CANTp_Conn_t));    
+    {   
       __cus_initial_Conn( &ConnPool[i] );
       ConnPool[i].ConnIndex = i;
       return &ConnPool[i];
@@ -154,6 +161,140 @@ void Cus_Cantp_MainFunction( void )
 }
 
 
+U8 Cus_Cantp_Register_Func_Callback( Cus_CanTP_CanSendFunc SendFunc, Cus_CanTP_DataIndication dataIntFunc, Cus_CanTP_ErrCallback errCallback )
+{
+  // 该API用于整体设置 底层发送驱动 ,上层接收通知 以及 错误回调.
+  if ( !SendFunc || !errCallback || !dataIntFunc )  return 0;
+
+  for( U8 i = 0; i < MAX_SUPPORT_CONN; i++ )
+  {
+    Cus_CANTp_Conn_t *pConn = &ConnPool[i];
+    pConn->SendFunc = SendFunc;
+    pConn->ErrCallBack = errCallback;
+    pConn->DataIndFunc = dataIntFunc;
+  }
+
+  return 1;
+}
+
+
+void Cus_Cantp_Config_ChannelNAI_Info( U8 targetAddr, U8 senderAddr, U8 targetAddr_Type, U8 AE, U8 ChannelIndex )
+{
+  if ( ChannelIndex >= CHANNEL_CONFIG_TABLE_COUNT )   return;
+
+  Cus_CANTP_Cfg_t *pCfg = Cus_Cantp_GetChannel(ChannelIndex);
+  if ( !pCfg )  return;
+
+  if ( pCfg->AddrMode == NORMAL_ADDRESS_MODE )
+  {
+    pCfg->N_AI.TA = (targetAddr > 0x1F) ? 0x00 : targetAddr;  // 标准寻址模式下 5位TA.
+    pCfg->N_AI.SA = (senderAddr > 0x1F) ? 0x00 : senderAddr;  // 标准模式下 5位SA.
+
+    // 确保 targetAddr_Type 只能为 0(普通寻址) 和 1(功能寻址). 其余情况按默认（普通寻址）处理.
+    pCfg->N_AI.TA_Type = (targetAddr_Type == 0 || targetAddr_Type == 1) ? targetAddr_Type : 0;
+    pCfg->N_AI.AE = 0;    // 普通寻址用不到 AE.
+  } 
+
+  if ( pCfg->AddrMode == EXT_ADDRESS_MODE )
+  {
+    pCfg->N_AI.TA = targetAddr;   // 拓展寻址模式 8位TA.
+    pCfg->N_AI.SA = senderAddr;   // 8位SA.
+    pCfg->N_AI.TA_Type = (targetAddr_Type == 0 || targetAddr_Type == 1) ? targetAddr_Type : 0;
+    pCfg->N_AI.AE = 0;
+  }
+
+  if ( pCfg->AddrMode == MIXED_ADDRESS_MODE )
+  {
+    // 混合寻址模式. 待实现.
+  }
+}
+
+
+void Cus_Cantp_Config_ChannelMain_Info( U8 addrMode, U8 TxDlc, U32 Function_CanID, U8 ChannelIndex )
+{
+  if ( ChannelIndex >= CHANNEL_CONFIG_TABLE_COUNT )   return;
+
+  Cus_CANTP_Cfg_t * pCfg = Cus_Cantp_GetChannel(ChannelIndex);
+  if ( !pCfg )    return;
+
+  pCfg->AddrMode = addrMode == (NORMAL_ADDRESS_MODE || addrMode == EXT_ADDRESS_MODE || addrMode == MIXED_ADDRESS_MODE) 
+                      ? addrMode : NORMAL_ADDRESS_MODE;
+
+  pCfg->FunctionalCanID = Function_CanID;
+
+  // TxDLC用于区分 经典CAN 和 CANFD. 由于该协议具有自动填充机制，所以不允许DLC小于8字节! 所有小于8的配置都将会默认配置到8字节.
+  pCfg->TxDLC = (TxDlc < 8 || TxDlc > 64) ? 8 : TxDlc;    
+}
+
+
+U8 Cus_Cantp_Register_RecvBuffer( U8 *buffer, U32 buffer_Size, U8 ConnIndex )
+{
+  if ( ConnIndex >= MAX_SUPPORT_CONN )  return 0;
+  // 该 API 用于向连接块注册缓冲区.
+  if ( !buffer || buffer_Size == 0 )  return 0;
+
+  Cus_CANTp_Conn_t *pConn = &ConnPool[ConnIndex];
+  pConn->pRecvBuffer = buffer;
+  pConn->RecvBuffer_Size = buffer_Size;
+
+  return 1;
+}
+
+
+U8 Cus_Cantp_Transmit( U8 channelTabID, U8 ConnIndex, const U8 *data, U32 len, void *canDevice )
+{
+  if ( channelTabID >= CHANNEL_CONFIG_TABLE_COUNT || ConnIndex >= MAX_SUPPORT_CONN )   return 0;
+
+  if ( !data || !canDevice || len == 0 )    return 0;
+
+  Cus_CANTp_Conn_t *pConn = &ConnPool[ConnIndex];
+  if ( pConn->ConnIndex != -1 )   return 0;   // 所选定的连接控制块已经被分配. 返回.
+
+  if ( pConn->ConnIndex == -1 )   
+  {
+    // 所选定的连接控制块未被分配. 对其进行分配. 为接下来通信做准备.
+    pConn->ConnIndex = ConnIndex;
+  }
+  pConn->BindCANDevice = canDevice;
+  pConn->ChannelConfigTabID = channelTabID;
+
+  if ( !pConn->SendFunc || !pConn->DataIndFunc )    
+  {
+    // 未注册必须的 SendFunc 和 DataIndFunc. 释放连接并返回.(errCallback可以选择进行注册，但是 SendFunc与DataIndFunc 必须注册)
+    Cus_Cantp_ReleaseConn(pConn);
+    return 0;
+  }
+
+  Cus_CANTP_Cfg_t *pCfg = Cus_Cantp_GetChannel(channelTabID);
+  if ( !pCfg )  
+  {
+    Cus_Cantp_ReleaseConn(pConn);
+    return 0;
+  }
+
+  if ( pCfg->TxDLC == 8 )
+  {
+    // 经典CAN情况.
+    U8 maxSingleLen = (pCfg->AddrMode == NORMAL_ADDRESS_MODE) ? 7 : 6;
+    if ( len <= maxSingleLen )
+        return Cus_Cantp_SendSingleFrame(pConn, data, len);     // 单帧即可发完.
+    else 
+        return Cus_Cantp_SendFirstFrame(pConn, data, len);      // 启动多帧发送.
+  }
+  
+  if ( pCfg->TxDLC > 8 )
+  {
+    // CAN FD情况. 待实现.
+  }
+
+  return 0;
+}
+
+
+
+/* ****************************************************************************** */
+/* ****************************************************************************** */
+
 U8 Cus_Cantp_SendFirstFrame( Cus_CANTp_Conn_t *pConn, const U8 *data, U32 total_len )
 {
   if ( !pConn || !data || total_len == 0 || 
@@ -232,10 +373,10 @@ U8 Cus_Cantp_SendSingleFrame( Cus_CANTp_Conn_t *pConn, const U8 *data, U8 len )
   if ( pConn->SendFunc && pConn->SendFunc(pConn, Canid, buffer, ret_dlc) != 0 )
   {
     // 发送成功.
+    pConn->Timer_N_As = TIMER_NAS;   // 启动发送确认超时
     pConn->CurrentState = CONN_TX_SF;      // 状态变化为发送单帧. 等待确认.
     return 1;
   }
-  pConn->Timer_N_As = TIMER_NAS;   // 启动发送确认超时
 
   return 0;
 }
@@ -266,7 +407,7 @@ U8 Cus_Cantp_SendFlowControlFrame( Cus_CANTp_Conn_t *pConn, Cus_CANTP_FlowState_
       // 更新状态. 启动N_Cr定时器.
       pConn->CurrentState = CONN_TX_FC;
       pConn->RemainingBS = pConn->BS;
-      pConn->Timer_N_As = TIMER_NAS;   // 启动发送确认超时
+      pConn->Timer_N_Ar = TIMER_NAR;   // 启动发送确认超时
     }
     else if ( fs == FLOW_OVFLW || fs == FLOW_WAIT )
     {
@@ -344,6 +485,9 @@ U8 Cus_Cantp_SendNextCF( Cus_CANTp_Conn_t *pConn )
 
   return 1;
 }
+
+/* ****************************************************************************** */
+/* ****************************************************************************** */
 
 
 
@@ -656,19 +800,19 @@ static void Cus_Cantp_RxIndication( Cus_CANTp_Conn_t *pConn, U32 canId, const U8
       Cus_Cantp_ProcessSF(pConn, data, dlc);   // SF帧 转发给SF处理机制.
     }
 
-    if ( byte0_high4Bit == 0x01 )
+    if ( byte0_high4Bit == 0x10 )
     {
       pConn->CurrentState = CONN_RX_FF;
       Cus_Cantp_ProcessFF(pConn, data, dlc);   // FF帧 转发给FF处理机制.
     }
 
-    if ( byte0_high4Bit == (0x01 << 1) )
+    if ( byte0_high4Bit == 0x20 )
     {
       pConn->CurrentState = CONN_RX_CF;
       Cus_Cantp_ProcessCF(pConn, data, dlc);    // CF帧 转发给CF处理机制.
     }
 
-    if ( byte0_high4Bit == (0x03) )
+    if ( byte0_high4Bit == 0x30 )
     {
       Cus_Cantp_ProcessFC(pConn, data, dlc);    // FC帧 转发给流控处理.
     }
@@ -1036,7 +1180,7 @@ void Cus_Cantp_TxConfirmation( void *CanDevice, U8 mailbox )
         {
           // 流控帧确认发送成功. 改变状态为 CONN_RX_WAIT_CF. 等待发送方的后续连续帧.
           pConn->CurrentState = CONN_RX_WAIT_CF;
-          pConn->Timer_N_As = 0;
+          pConn->Timer_N_Ar = 0;
           pConn->Timer_N_Cr = TIMER_NCR;      // 启动NCR. 在 CONN_RX_WAIT_CF 状态下 等待CF.
           break;
         }
@@ -1056,7 +1200,6 @@ static void __cus_initial_Conn( Cus_CANTp_Conn_t *pConn )
   pConn->BS = 0;
   pConn->STmin = 0;
 
-  pConn->CAN_ID = 0;
   pConn->RxBytes = 0;
   pConn->TxBytes = 0;
   pConn->Remaining = 0;
@@ -1117,5 +1260,28 @@ static void __cus_reset_conn_tx_state(Cus_CANTp_Conn_t *pConn)
   pConn->Timer_StminDelayOnly = 0;
   pConn->STmin = 0;
   pConn->BS = 0;
+}
+
+
+
+static U16 Cus_Cantp_StminConverted( const U8 Stmin )
+{
+  // ISO 15765-2: STmin 值含义
+  // 0x00 - 0x7F: 直接为毫秒数
+  // 0x80 - 0xF0: 保留
+  // 0xF1 - 0xF9: 100us - 900us
+  // 0xFA - 0xFF: 保留
+
+  U16 ST_Value = (U16)Stmin;
+  if ( ST_Value > 0xFF )  return 0;
+
+  if ( ST_Value <= 0x7F )   return ST_Value;  // 直接返回ms.
+
+  if ( (ST_Value >= 0xF1) && (ST_Value <= 0xF9) )
+  {
+    return 1;             // 简化处理. 最小延时1ms.
+  }
+
+  return 0;
 }
 

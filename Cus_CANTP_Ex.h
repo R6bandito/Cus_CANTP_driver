@@ -2,24 +2,11 @@
 #define __CUS_CANTP_EX_H__
 
 
-#include "Cus_CANTP.h"
+#include "CAN_Cus.h"
+#include <stdio.h>
 
-void cantp_test_single_normal( void );
+void CANTP_Single_Test( void );
 
-void cantp_test_single_ext( void );
-
-void cantp_test_first_standard( void );
-
-void cantp_test_first_ext( void );
-
-void cantp_test_consective( void );
-
-void cantp_test_flowcontrol( void );
-
-void cantp_test_canid( void );
-
-void cantp_test_get_length_from_ff( void );
-
-void cantp_test_conn_pool( void );
+void test_multiframe( void ); 
 
 #endif // __CUS_CANTP_EX_H__

@@ -32,6 +32,11 @@ typedef struct Cus_CANTP_Conn Cus_CANTp_Conn_t;
 
 /*  ---------------------------------------------------  */
   #define MAX_SUPPORT_CONN             (4U)
+    #define CONN_INDEX_1               (0U)
+    #define CONN_INDEX_2               (1U)
+    #define CONN_INDEX_3               (2U)
+    #define CONN_INDEX_4               (3U)
+
 
   #define NORMAL_ADDRESS_MODE          (0U)
   #define EXT_ADDRESS_MODE             (1U)
@@ -88,7 +93,6 @@ typedef enum
 
 struct Cus_CANTP_Conn
 {
-  U32 CAN_ID;               // 会话ID.
   Cus_CANTP_State_t CurrentState;     // 当前状态.
 
   U32 TxBytes;              // 已经发送的数据(字节).
@@ -140,6 +144,13 @@ void Cus_Cantp_MainFunction( void );
   U8 Cus_Cantp_RecieveFrame( const U8 *data, U8 dlc, U32 canid );   // 上层喂帧总API.
   U32 Cus_Cantp_GetCanID( const Cus_CANTP_Cfg_t *pCfg );   // 得到实际发送的 CAN ID.
   U32 Cus_Cantp_GetDataLengthFromFF( const U8 *frame );
+  U8 Cus_Cantp_Transmit( U8 channelTabID, U8 ConnIndex, const U8 *data, U32 len, void *canDevice );
+
+  U8 Cus_Cantp_Register_Func_Callback( Cus_CanTP_CanSendFunc SendFunc, Cus_CanTP_DataIndication dataIntFunc, Cus_CanTP_ErrCallback errCallback );
+  U8 Cus_Cantp_Register_RecvBuffer( U8 *buffer, U32 buffer_Size, U8 ConnIndex );
+
+  void Cus_Cantp_Config_ChannelNAI_Info( U8 targetAddr, U8 senderAddr, U8 targetAddr_Type, U8 AE, U8 ChannelIndex );
+  void Cus_Cantp_Config_ChannelMain_Info( U8 addrMode, U8 TxDlc, U32 Function_CanID, U8 ChannelIndex );
 
   U8 Cus_Cantp_SendFirstFrame( Cus_CANTp_Conn_t *pConn, const U8 *data, U32 total_len );    // 发送FF帧.
   U8 Cus_Cantp_SendSingleFrame( Cus_CANTp_Conn_t *pConn, const U8 *data, U8 len );          // 发送SF帧.
