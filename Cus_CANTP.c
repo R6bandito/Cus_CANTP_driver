@@ -136,8 +136,7 @@ void Cus_Cantp_MainFunction( void )
     if ( pConn->Timer_N_As == 0 )
     {
       // 发送确认超时检测
-      if ( (pConn->CurrentState == CONN_TX_FF || pConn->CurrentState == CONN_TX_SF) ||
-      (pConn->CurrentState == CONN_TX_CF && pConn->Timer_StminDelayOnly == 0) )
+      if ( (pConn->CurrentState == CONN_TX_FF || pConn->CurrentState == CONN_TX_SF) )
       {
         if ( pConn->ErrCallBack != NULL ) pConn->ErrCallBack(pConn, CUS_CANTP_ERR_NAS_TIMEOUT);
         else Cus_Cantp_ReleaseConn(pConn);
@@ -187,8 +186,8 @@ void Cus_Cantp_Config_ChannelNAI_Info( U8 targetAddr, U8 senderAddr, U8 targetAd
 
   if ( pCfg->AddrMode == NORMAL_ADDRESS_MODE )
   {
-    pCfg->N_AI.TA = (targetAddr > 0x1F) ? 0x00 : targetAddr;  // 标准寻址模式下 5位TA.
-    pCfg->N_AI.SA = (senderAddr > 0x1F) ? 0x00 : senderAddr;  // 标准模式下 5位SA.
+    pCfg->N_AI.TA = targetAddr & 0x1F;   // 取低5位
+    pCfg->N_AI.SA = senderAddr & 0x1F;
 
     // 确保 targetAddr_Type 只能为 0(普通寻址) 和 1(功能寻址). 其余情况按默认（普通寻址）处理.
     pCfg->N_AI.TA_Type = (targetAddr_Type == 0 || targetAddr_Type == 1) ? targetAddr_Type : 0;
@@ -944,7 +943,7 @@ static void Cus_Cantp_ProcessFF(Cus_CANTp_Conn_t *pConn, const U8 *data, U8 dlc)
   pConn->TotalSize = total_length;
   pConn->RxBytes = ff_payload;
   pConn->RxPos = ff_payload;
-  pConn->SN_Code++;     // 接收到FF的SN为0. 下一帧期望的CF SNCODE应该为1.
+  pConn->SN_Code = (pConn->SN_Code + 1) & 0x0F;     // 接收到FF的SN为0. 下一帧期望的CF SNCODE应该为1.
   pConn->Remaining = pConn->TotalSize - pConn->RxBytes;
 
   Cus_Cantp_SendFlowControlFrame(pConn, FLOW_CTS);    // 发送流控.(内部置起 CONN_RX_WAIT_CF)
@@ -1000,7 +999,7 @@ static void Cus_Cantp_ProcessCF(Cus_CANTp_Conn_t *pConn, const U8 *data, U8 dlc)
   pConn->RxBytes += copylen;
   pConn->RxPos += copylen;
   pConn->Remaining -= copylen;
-  pConn->SN_Code++;   // 下一帧期望的SNCODE.
+  pConn->SN_Code = (pConn->SN_Code + 1) & 0x0F;   // 下一帧期望的SNCODE.
 
   if ( pConn->BS > 0 && pConn->RemainingBS > 0 )  pConn->RemainingBS--;   // 块计数器处理.
 
@@ -1174,6 +1173,8 @@ void Cus_Cantp_TxConfirmation( void *CanDevice, U8 mailbox )
           // 单帧发送成功. 单帧直接结束会话即可.(IDLE通信状态)
           pConn->Timer_N_As = 0;
           pConn->CurrentState = CONN_IDLE;
+
+          break;
         }
 
       case CONN_TX_FC:
