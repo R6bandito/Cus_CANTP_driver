@@ -371,8 +371,15 @@ U8 Cus_Cantp_SendSingleFrame( Cus_CANTp_Conn_t *pConn, const U8 *data, U8 len )
   
   if ( pConn->SendFunc && pConn->SendFunc(pConn, Canid, buffer, ret_dlc) != 0 )
   {
-    // 发送成功.
+    // 发送提交成功.
     pConn->Timer_N_As = TIMER_NAS;   // 启动发送确认超时
+
+    // 虽然单帧发送很快结束. 但是此处为了统一，依然短暂将通信讯息记录入通信控制模块.
+    pConn->TotalSize = len;
+    pConn->TxBytes = len;
+    pConn->TxPos = len;
+    pConn->Remaining = 0;       // 单帧通信不存在 "剩余" 概念. 此处显示设置，仅仅是为保证格式统一.
+
     pConn->CurrentState = CONN_TX_SF;      // 状态变化为发送单帧. 等待确认.
     return 1;
   }
@@ -1172,6 +1179,7 @@ void Cus_Cantp_TxConfirmation( void *CanDevice, U8 mailbox )
         {
           // 单帧发送成功. 单帧直接结束会话即可.(IDLE通信状态)
           pConn->Timer_N_As = 0;
+          __cus_reset_conn_tx_state(pConn);     // 发送端信息打扫.
           pConn->CurrentState = CONN_IDLE;
 
           break;
@@ -1261,6 +1269,7 @@ static void __cus_reset_conn_tx_state(Cus_CANTp_Conn_t *pConn)
   pConn->Timer_StminDelayOnly = 0;
   pConn->STmin = 0;
   pConn->BS = 0;
+  pConn->BindCANDevice = NULL;
 }
 
 
