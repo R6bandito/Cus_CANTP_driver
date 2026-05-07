@@ -16,7 +16,7 @@ typedef signed short S32;
 #endif
 /*  ---------------------------------------------------  */
 
-#define CHANNEL_CONFIG_TABLE_COUNT          (2)
+#define CHANNEL_CONFIG_TABLE_COUNT          (4)
 #define BASE_CANTP_ADDR                     (0x700UL)
 #define FUNCTIONAL_ID                       (0x7DFUL)
 

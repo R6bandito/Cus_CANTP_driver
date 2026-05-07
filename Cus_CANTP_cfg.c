@@ -3,8 +3,10 @@
 
 Cus_CANTP_Cfg_t ChannelConfigTable[CHANNEL_CONFIG_TABLE_COUNT] = 
 {
-  [0] = {.N_AI.TA = 0, .N_AI.SA = 0, .N_AI.AE = 0, .N_AI.TA_Type = 0, .AddrMode = 0, .TxDLC = 8, .FunctionalCanID = FUNCTIONAL_ID},
-  [1] = {.N_AI.TA = 0, .N_AI.SA = 0, .N_AI.AE = 0, .N_AI.TA_Type = 0, .AddrMode = 1, .TxDLC = 8, .FunctionalCanID = FUNCTIONAL_ID}
+  [0] = {.N_AI.TA = 0, .N_AI.SA = 0, .N_AI.AE = 0, .N_AI.TA_Type = 0, .AddrMode = 0, .TxDLC = 8, .FunctionalCanID = FUNCTIONAL_ID},   // 经典CAN(8DLC)普通寻址通道.
+  [1] = {.N_AI.TA = 0, .N_AI.SA = 0, .N_AI.AE = 0, .N_AI.TA_Type = 0, .AddrMode = 0, .TxDLC = 8, .FunctionalCanID = FUNCTIONAL_ID},    
+  [2] = {.N_AI.TA = 0, .N_AI.SA = 0, .N_AI.AE = 0, .N_AI.TA_Type = 0, .AddrMode = 0, .TxDLC = 8, .FunctionalCanID = FUNCTIONAL_ID},
+  [3] = {.N_AI.TA = 0, .N_AI.SA = 0, .N_AI.AE = 0, .N_AI.TA_Type = 0, .AddrMode = 0, .TxDLC = 8, .FunctionalCanID = FUNCTIONAL_ID}
 };
 
 
