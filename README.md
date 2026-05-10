@@ -134,7 +134,7 @@ pDev->registerRxBuffer(pDev, ITBuffer, sizeof(ITBuffer));
 
 `Cus_CanTP_canSendFunc_Asynchronous` 是 Cus CAN 库提供的异步发送回调。`indication` 是用户需要自己实现的接收回调（在中断上下文执行，不能阻塞）。 **无论是接收还是发送， 均需要配置 发送回调！**
 
-    5. 对于接收方。 在开启接收FIFO中断，初始化CANTP系统及配置接收控制块后，便已进入接收状态。 当bxCAN收到一帧CAN数据后，会触发中断，将其放入Cus_CAN驱动库维护的环形缓冲区中，并且从该缓冲区中取帧喂给CANTP系统。
+5. 对于接收方。 在开启接收FIFO中断，初始化CANTP系统及配置接收控制块后，便已进入接收状态。 当bxCAN收到一帧CAN数据后，会触发中断，将其放入Cus_CAN驱动库维护的环形缓冲区中，并且从该缓冲区中取帧喂给CANTP系统。
 
 ​	对于发送方，在配置发送控制块后，通过`Cus_Cantp_startTransmit()` 请求一次CANTP传输。该 API 中会自动区分是否开启多帧传输。
 
