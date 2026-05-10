@@ -84,7 +84,7 @@ pDev->EnableInterrupt(pDev, CAN_IT_RX_FIFO0_MSG_PENDING);
 pDev->EnableInterrupt(pDev, CAN_IT_TX_MAILBOX_EMPTY);
 ```
 
-    3. 注册缓冲区（注：通过设备控制块注册的该缓冲区并不直接用于CANTP，但是CANTP接收帧依赖Cus驱动库实现的环形缓冲区，因此需要为Cus库注册一块内存用于环形缓冲区）。
+3. 注册缓冲区（注：通过设备控制块注册的该缓冲区并不直接用于CANTP，但是CANTP接收帧依赖Cus驱动库实现的环形缓冲区，因此需要为Cus库注册一块内存用于环形缓冲区）。
 
 ```c
 uint8_t ITBuffer[1024];
@@ -104,7 +104,7 @@ pDev->registerRxBuffer(pDev, ITBuffer, sizeof(ITBuffer));
    }
 ```
 
-    4. 初始化 CANTP 系统，并创建接收或发送连接控制块。
+4. 初始化 CANTP 系统，并创建接收或发送连接控制块。
 
 - `Cus_Cantp_CreateTxConnection`：创建发送控制块（作为发送方）。
 - `Cus_Cantp_CreateRxConnection`：创建接收控制块（作为接收方）。
