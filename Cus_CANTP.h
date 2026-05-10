@@ -9,6 +9,12 @@
 #include <string.h>
 #include "Cus_CANTP_cfg.h"
 
+#define USE_CANTP_UTILIS             (0)
+  #if (USE_CANTP_UTILIS)
+    #include "Cus_CANTP_Utils.h"
+  #endif 
+
+
 /*  ---------------------------------------------------  */
 typedef struct Cus_CANTP_Conn Cus_CANTp_Conn_t;
   typedef unsigned char U8;
@@ -152,34 +158,47 @@ struct Cus_CANTP_Conn
 
 
 /*  ---------------------------------------------------  */
-void Cus_Cantp_HeartTick( void );
-void Cus_Cantp_MainFunction( void );
+  #if (USE_CANTP_UTILIS)
+    void Cus_Cantp_utilsRecieve_FROM_ISR( CAN_TypeDef *canDevice, uint8_t FIFOx );
+    U8 Cus_Cantp_utilsSendAsync( Cus_CANTp_Conn_t *pConn, U32 canId, const U8* data, U16 dlc );
+  #endif 
 /*  ---------------------------------------------------  */
-
 
 /*  ---------------------------------------------------  */
   #if (API_USE_LEGACY)
     U8 Cus_Cantp_Transmit( U8 channelTabID, U8 ConnIndex, const U8 *data, U32 len, void *canDevice );
+    U8 Cus_Cantp_Register_Func_Callback( Cus_CanTP_CanSendFunc SendFunc, Cus_CanTP_DataIndication dataIntFunc, Cus_CanTP_ErrCallback errCallback );
   #endif 
 /*  ---------------------------------------------------  */
 
 
 /*  ---------------------------------------------------  */
-  Cus_CANTp_Conn_t *Cus_Cantp_GetIdleConn( void );
+  void Cus_Cantp_HeartTick( void );
+  void Cus_Cantp_MainFunction( void );
   void Cus_Cantp_ReleaseConn( Cus_CANTp_Conn_t *pConn );
   void Cus_Cantp_SystemInit( void );
   void Cus_Cantp_TxConfirmation( void *CanDevice, U8 mailbox );
   U8 Cus_Cantp_RecieveFrame( const U8 *data, U8 dlc, U32 canid );   // 上层喂帧总API.
-  U8 Cus_Cantp_Register_Func_Callback( Cus_CanTP_CanSendFunc SendFunc, Cus_CanTP_DataIndication dataIntFunc, Cus_CanTP_ErrCallback errCallback );
-  U8 Cus_Cantp_Register_RecvBuffer( U8 *buffer, U32 buffer_Size, U8 ConnIndex );
-  void Cus_Cantp_Config_ChannelNAI_Info( U8 targetAddr, U8 senderAddr, U8 targetAddr_Type, U8 AE, U8 ChannelIndex );
-  void Cus_Cantp_Config_ChannelMain_Info( U8 addrMode, U8 TxDlc, U32 Function_CanID, U8 ChannelIndex );
 
   // 创建一个接收连接.
-  Cus_CANTp_Conn_t *Cus_Cantp_CreateRxConnection( U8 ownAddr, U8 addrMode, U8 bs, U8 stamin, void *canDevice, U8 *bufferRx, U32 size, Cus_CanTP_CanSendFunc sendFunc, Cus_CanTP_DataIndication dataIncFunc );
+  Cus_CANTp_Conn_t *Cus_Cantp_CreateRxConnection( U8 ownAddr, 
+                                                  U8 addrMode, 
+                                                  U8 bs, 
+                                                  U8 stmin, 
+                                                  void *canDevice, 
+                                                  U8 *bufferRx, 
+                                                  U32 size, 
+                                                  Cus_CanTP_CanSendFunc sendFunc, 
+                                                  Cus_CanTP_DataIndication dataIncFunc, 
+                                                  Cus_CanTP_ErrCallback errCallBack );
 
   // 创建一个发送连接.
-  Cus_CANTp_Conn_t *Cus_Cantp_CreateTxConnection( U8 targetAddr, U8 sourceAddr, U8 addrMode, void *canDevice, Cus_CanTP_CanSendFunc sendFunc, Cus_CanTP_ErrCallback errCallback );
+  Cus_CANTp_Conn_t *Cus_Cantp_CreateTxConnection( U8 targetAddr, 
+                                                  U8 sourceAddr, 
+                                                  U8 addrMode, 
+                                                  void *canDevice, 
+                                                  Cus_CanTP_CanSendFunc sendFunc, 
+                                                  Cus_CanTP_ErrCallback errCallback );
 
   // 请求一次传输.
   S8 Cus_Cantp_startTransmit( Cus_CANTp_Conn_t *pConn, const U8 *data, U32 len );

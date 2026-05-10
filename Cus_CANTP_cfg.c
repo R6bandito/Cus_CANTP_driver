@@ -10,6 +10,10 @@ Cus_CANTP_Cfg_t ChannelConfigTable[CHANNEL_CONFIG_TABLE_COUNT] =
 };
 
 
+// 备份数组，大小与原始表相同.
+Cus_CANTP_Cfg_t ChannelConfigTable_BackUP[CHANNEL_CONFIG_TABLE_COUNT];
+
+
 Cus_CANTP_Cfg_t *Cus_Cantp_GetChannel( U8 ChannalIndex )
 {
   if ( ChannalIndex >= CHANNEL_CONFIG_TABLE_COUNT )  return NULL;
