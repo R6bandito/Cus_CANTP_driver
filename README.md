@@ -266,11 +266,172 @@ void Cus_Cantp_SystemInit( void )
 
 ------
 
+- `void Cus_Cantp_TxConfirmation( void *CanDevice, U8 mailbox )`
+
+```c
+void Cus_Cantp_TxConfirmation( void *CanDevice, U8 mailbox )
+```
+
+**参数**：
+
+- （void *）CanDevice  指向对应 CAN 外设基址的指针。为便于移植，内部将其转化为`uint8_t *`进行比较，而不依赖
+
+   `CAN_TypeDef *`类型。事实上，CANTP 作为中间件，并不关心底层的实现，因此对于底层的外设基准指针，不依赖ST官方给出的硬件抽象层。
+
+-    (U8) mailbox   已完成发送的邮箱号。该参数对应触发该次发送完成中断的邮箱号，在 ISR 中需要明确给出该参数，以便内部能够正确维护发送状态机。
+
+**返回值**：void.
+
+描述：发送完成确认函数。**该函数不应由用户代码主动调用，而应由上层确保将其放入 HAL 的发送邮箱完成中断回调（如 `HAL_CAN_TxMailbox0CompleteCallback`）中（若使用HAL，例如使用配套的Cus_CAN库）**，用于通知 CAN TP 协议栈某一帧已成功从硬件发送到总线上。若不依赖于HAL，则上层需要确保每个发送邮箱对应的发送完成中断中，都有该函数并且传入正确的邮箱号。
+
+**功能细节**：
+
+​	该函数内部会遍历所有连接控制块，根据以下规则匹配对应的连接：
+
+- 连接当前处于活跃状态（非 CONN_IDLE ）。
+- 绑定的 CAN 设备（`BindCANDevice`）与传入的 `CanDevice` 一致。
+- 上次发送使用的邮箱（`TxMailBoxIndex`）与传入的 `mailbox` 一致。
+
+匹配成功后，根据设备当前所处的发送状态，执行对应的状态转换。
+
+- **`CONN_TX_FF`**（首帧发送完成）：转换到 `CONN_TX_WAIT_FC`，启动 `N_Bs` 超时定时器，等待接收方的流控帧。
+- **`CONN_TX_CF`**（连续帧发送完成）：检查是否所有数据已发送完毕。若当前 BS 块已发完，转换到 `CONN_TX_WAIT_FC` 等待下一个流控；否则清除 `N_As` 超时，等待 `STmin` 延时后继续发送下一帧。
+- **`CONN_TX_SF`**（单帧发送完成）：转换到 `CONN_IDLE`，本次通信结束。
+- **`CONN_TX_FC`**（流控帧发送完成）：转换到 `CONN_RX_WAIT_CF`，启动 `N_Cr` 超时定时器，等待发送方的连续帧。
+
+**调用示例（基于HAL）**：
+
+```c
+void HAL_CAN_TxMailbox0CompleteCallback( CAN_HandleTypeDef *hcan )
+{
+    Cus_Cantp_TxConfirmation((void *)hcan->Instance, 1);			// 1 对应邮箱0. 
+}
+
+void HAL_CAN_TxMailbox1CompleteCallback(CAN_HandleTypeDef *hcan)
+{
+    Cus_Cantp_TxConfirmation((void *)hcan->Instance, CAN_TX_MAILBOX1);
+}
+```
+
+**注意事项**：
+
+1.由用户自行实现的 `SendFunc` 在请求发送成功后一定要将所用的实际邮箱号存入 `pConn->TxMailBoxIndex`! 否则本函数无法匹配到正确的连接。
+
+2.目前版本下（Ver 2.0），本函数遍历连接池并读取修改连接块状态时无临界区保护，因此若用于多线程环境，建议自行引入临界区进行保护。
+
+------
+
+- `U8 Cus_Cantp_RecieveFrame( const U8 *data, U8 dlc, U32 canid )`
+
+```c
+U8 Cus_Cantp_RecieveFrame( const U8 *data, U8 dlc, U32 canid )
+```
+
+**参数**：
+
+- (const U8 *) data：指向接收到的 CAN 帧数据段（8 字节）的指针。注意，本协议栈采用填充机制（数据段不足 8 字节默认使用 0xCC 填充到 8字节）。
+- (U8) dlc：CAN 帧的数据长度码。**必须 >= 8**（经典 CAN），否则该帧不符合协议规定，将被忽略。dlc > 8 情况为 CAN FD 。
+- (U32) canid： CAN 帧的标识符。**不能为 0**。函数内部会根据此 ID 匹配对应的连接控制块。
+
+**返回值**：
+
+-  0 (入口校验失败，也表征当前帧未被任何连接块接收处理)。
+- \> 0（成功匹配并喂给对应连接的数量， 功能寻址模式下可能匹配多个连接）。
+
+**描述**：**物理层到CANTP协议层的入口点**。上层喂帧总入口，该函数应在底层 CAN 接收中断或接收回调中调用，将一帧完整的 CAN 报文传递给 CAN TP 协议栈。函数内部会自动完成连接匹配和帧类型识别，并将帧分发给对应的处理函数。
+
+**功能细节**：
+
+​	该函数内部执行如下操作：
+
+- 对入口参数进行校验，校验失败返回 0。
+- 对整个连接池进行遍历，跳过非活跃状态的连接块。
+- 对活跃的连接控制块进行 寻址模式检查（功能寻址，物理寻址）。
+- 由于功能寻址可能同时匹配多个连接，匹配成功后**不会中断循环**，而是 `continue` 继续遍历。
+- 对于物理寻址模式，通过 `Cus_Cantp_VerifyIDConn` 进行精确匹配（普通寻址从 CAN ID 中提取 TA 位段，拓展寻址从数据段第一个字节提取 TA）。
+- 匹配成功后调用 `Cus_Cantp_RxIndication`，内部自动对帧类型进行识别（SF / FF / CF / FC），并分别转发到对应处理函数。
+
+**调用示例**：
+
+```c
+void HAL_CAN_RxFifo0MsgPendingCallback(CAN_HandleTypeDef *hcan)
+{
+    CAN_RxHeaderTypeDef RxHeader;
+    U8 buffer[8];
+
+    if (HAL_CAN_GetRxMessage(hcan, CAN_RX_FIFO0, &RxHeader, buffer) == HAL_OK)
+    {
+        Cus_Cantp_RecieveFrame(buffer, RxHeader.DLC, RxHeader.StdId);
+    }
+}
+```
+
+**注意事项**：
+
+1.**帧独占行为**：一旦启用 CAN TP 并调用本函数，所有被匹配到的 CAN 帧都会被协议栈“吃掉”。不符合协议格式的帧（PCI 字节非法）将被静默丢弃，不会被上层感知。因此务必切记，启用 CANTP 后，后续所有CAN收发行为都请通过CANTP进行。
+
+2.本函数**调用环境为中断上下文中**，其内部会调用到用户所注册的接收完成回调：`DataIndFunc`。因此上层在实现`DataIndFunc`时应尤其注意该回调在中断上下文中执行安全（不阻塞、短耗时）。
+
+3.当前版本（Ver2.0）仅仅支持经典CAN(8帧数据段类型)，`dlc > 8` 的 CAN FD 帧处理逻辑尚未实现（入口已预留）。
+
+------
+
+- `Cus_CANTp_Conn_t *Cus_Cantp_CreateRxConnection( ... )`
+
+```c
+  Cus_CANTp_Conn_t *Cus_Cantp_CreateRxConnection( U8 ownAddr, 
+                                                  U8 addrMode, 
+                                                  U8 bs, 
+                                                  U8 stmin, 
+                                                  void *canDevice, 
+                                                  U8 *bufferRx, 
+                                                  U32 size, 
+                                                  Cus_CanTP_CanSendFunc sendFunc, 
+                                                  Cus_CanTP_DataIndication dataIncFunc, 
+                                                  Cus_CanTP_ErrCallback errCallBack );
+```
+
+**参数**：
+
+- (U8) ownAddr：**本机接收地址**。只有当收到的 CAN 帧中目标地址（TA）与该 `ownAddr` 匹配时，才会被该连接处理。
+- (U8) addrMode：**寻址模式**。可选值有`CANTP_ADDR_MODE_COMMON`（普通寻址 默认），`CANTP_ADDR_MODE_EXT`（拓展寻址），`CANTP_ADDR_MODE_MIX`（混合寻址，当前未实现）。
+- (U8) bs：**流控参数 BS（Block Size）**。`bs = 0` 表示不限制块大小，发送方可以一口气把所有连续帧发完。该参数仅在多帧传输中使用。
+- (U8) stmin：**流控参数 STmin（Separation Time Minimum）**。值由接收方在流控帧中告知发送方，表示连续帧之间的最小时间间隔。`stmin = 0` 表示无间隔，发送方可以背靠背发送连续帧。单位为毫秒。
+- (void *)canDevice：**绑定的 CAN 外设基址指针**。传入实际使用的 CAN 外设地址（如 `(void *)CAN1`）。该指针仅用于内部匹配（发送确认时查找对应设备），**协议栈不会解引用该指针**，因此可以传入任意类型的外设标识。
+- (U8 *)bufferRx：**用户提供的接收缓冲区指针**。协议栈在接收多帧数据时，会逐步将数据拷贝到该缓冲区中。缓冲区大小必须足以容纳预期的最大传输数据长度，否则协议栈会发送 OVFLW 流控帧并中止传输。
+- (U32) size：**接收缓冲区的总大小（字节）**。
+- (Cus_CanTP_CanSendFunc) sendFunc：由用户实现的**底层发送回调函数**。**即使创建的是接收连接，也必须提供发送回调**，因为接收方在收到首帧后需要自动回复流控帧。该回调必须是**非阻塞**的（立即返回成功或失败）。
+- (Cus_CanTP_DataIndication) dataIncFunc：由用户实现的**数据接收完成回调**。当一包完整的多帧数据接收完毕（接收方的连续帧全部到达），或收到单帧数据时，协议栈会调用此回调，将数据指针和长度通知上层。**该回调在 CAN 接收中断上下文中调用**，用户实现时必须**保证非阻塞、短耗时**。
+- (Cus_CanTP_ErrCallback) errCallBack：**错误回调（可选，可传 NULL）**。当接收过程出现超时（如 N_Cr 超时，等待连续帧超时）时，协议栈会调用此回调通知上层。若传入 NULL，则超时后连接将被静默释放。
+
+**返回值**：
+
+- NULL：创建失败（连接池已满、缓冲区大小不足、参数无效、必要回调缺失等）。
+- 非 NULL：（Cus_CANTp_Conn_t * ）成功分配并初始化连接控制块，返回其指针。
+
+**描述**：该函数用于创建一个 CAN TP **接收连接**控制块。该函数从内部连接池中分配一个空闲连接，绑定底层 CAN 设备、注册接收缓冲区、配置寻址参数和流控参数，并设置上层回调函数。
+
+**功能细节**：	无
+
+**注意事项**：
+
+1.**接收缓冲区必须足够大**：如果实际接收的数据长度超过 `size`，协议栈会在解析首帧（FF）时发现长度不匹配，主动发送 OVFLW 流控帧并中止传输，同时释放连接。此时上层不会收到 `dataIncFunc` 回调。
+
+2.发送回调（`sendFunc`）与接收回调（`dataIncFunc`）为必要回调，若传入NULL则控制块将无法创建。
+
+3.**关于 `ownAddr` 和 CAN ID 的关系**：`ownAddr` 是业务层的“本机地址”，CAN TP 协议栈内部会自动将其映射到 CAN ID 的对应位段（普通寻址）或数据段首字节（拓展寻址）。在**接收时，协议栈匹配的是 CAN 帧中实际携带的 TA 字段**。创建连接时，`ownAddr` 告诉协议栈“本机是 XX”，用于接收以及后续回复流控帧时构造正确的源地址。
+
+------
+
+
+
+------
+
 ## ⚠️注意事项
 
 - **重要约束：CAN TP 启用后的帧管理**：
 
-对于采用 Cus_CAN + CANTP 形式，当前版本下( Ver 2.0 )，一旦启用 CAN TP 协议栈并对某个 CAN ID 建立连接：**所有从硬件接收到的 CAN 帧都会被送入 CAN TP 层进行匹配处理。**一旦接收到的某帧不符合(ISO 15765-2)协议形式，**则由于缓冲区设计原因会被静默丢弃**！
+对于采用 Cus_CAN + CANTP 形式，当前版本下( Ver 2.0 )，一旦启用 CAN TP 协议栈并对某个 CAN ID 建立连接：**所有从硬件接收到的 CAN 帧都会被送入 CAN TP 层进行匹配处理**。一旦接收到的某帧不符合(ISO 15765-2)协议形式，**则由于缓冲区设计原因会被静默丢弃**！
 
 ​      因此一但启用CANTP，建议所有通信统一走CANTP协议，不要混用裸CAN数据帧和CANTP协议帧。
 

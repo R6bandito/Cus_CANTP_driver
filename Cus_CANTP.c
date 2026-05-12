@@ -127,7 +127,7 @@ void Cus_Cantp_HeartTick( void )
     if ( pConn->CurrentState == CONN_IDLE ) continue;
 
     if ( pConn->Timer_N_Ar > 0 )  pConn->Timer_N_Ar--;
-    if ( pConn->Timer_N_As > 0 )  pConn->Timer_N_As--;
+    if ( pConn->Timer_N_As > 0 )  pConn->Timer_N_As--;  
     if ( pConn->Timer_N_Bs > 0 )  pConn->Timer_N_Bs--;
     if ( pConn->Timer_N_Cr > 0 )  pConn->Timer_N_Cr--;
 
@@ -192,7 +192,7 @@ void Cus_Cantp_MainFunction( void )
     }
 
     // STmin 延时结束，发送下一帧 CF
-    if (pConn->Timer_StminDelayOnly == 0 && pConn->CurrentState == CONN_TX_CF) 
+    if ( pConn->Timer_StminDelayOnly == 0 && pConn->CurrentState == CONN_TX_CF ) 
     {
       Cus_Cantp_SendNextCF(pConn);
     }
