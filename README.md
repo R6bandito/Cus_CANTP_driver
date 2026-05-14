@@ -153,6 +153,27 @@ pDev->registerRxBuffer(pDev, ITBuffer, sizeof(ITBuffer));
 
 
 
+
+
+------
+
+## ⚙️构建与配置
+
+​	本协议栈通过**预处理器宏**进行功能裁切和参数配置。以下宏当前版本均定义在 `Cus_CANTP.h` 中，用户可根据需求修改。
+
+|           宏名称           | 默认值 |                             描述                             |
+| :------------------------: | :----: | :----------------------------------------------------------: |
+|       API_USE_LEGACY       |   0    | 是否启用旧版兼容 API（开发过程中部分API由于设计问题导致上层不易用，或逻辑难以理解，后续版本中，该部分API被迭代以后放入该宏当中）。建议保持为0。 |
+|      USE_CANTP_UTILIS      |   0    | 是否启用配套的 UTILS 工具库（纯寄存器操作，零 HAL 依赖）。设为 `1` 后，编译时会自动包含 `Cus_CANTP_Utils.h`，并可使用 `Cus_Cantp_utilsSendAsync` 和 `Cus_Cantp_utilsRecieve_FROM_ISR`。以及工具库中其余对外公开方法。（若配套使用 CAN_Cus 库，不建议开启该宏，有冲突风险）。 |
+|      MAX_SUPPORT_CONN      |   4    | 最大同时支持的连接数。可增大该宏以在一台设备中支持更多连接。但会增加 RAM 占用。 |
+|         TIMER_NBS          |  200   |      N_Bs 超时时间（ms）。发送方等待流控帧的最大时间。       |
+|         TIMER_NAS          |  100   |     N_As 超时时间（ms）。发送方等待发送确认的最大时间。      |
+|         TIMER_NAR          |  200   |     N_Ar 超时时间（ms）。接收方等待发送确认的最大时间。      |
+|         TIMER_NCR          |  100   |      N_Cr 超时时间（ms）。接收方等待连续帧的最大时间。       |
+| CHANNEL_CONFIG_TABLE_COUNT |   4    | 通道配置表大小（定义在 `Cus_CANTP_cfg.h` 中）。应与 `MAX_SUPPORT_CONN` 保持一致。 |
+
+
+
 ------
 
 ## **API Reference**
@@ -421,9 +442,109 @@ void HAL_CAN_RxFifo0MsgPendingCallback(CAN_HandleTypeDef *hcan)
 
 3.**关于 `ownAddr` 和 CAN ID 的关系**：`ownAddr` 是业务层的“本机地址”，CAN TP 协议栈内部会自动将其映射到 CAN ID 的对应位段（普通寻址）或数据段首字节（拓展寻址）。在**接收时，协议栈匹配的是 CAN 帧中实际携带的 TA 字段**。创建连接时，`ownAddr` 告诉协议栈“本机是 XX”，用于接收以及后续回复流控帧时构造正确的源地址。
 
+**调用示例**：
+
+```c
+Cus_CANTp_Conn_t *pConn = Cus_Cantp_CreateRxConnection(0x12, CANTP_ADDR_MODE_COMMON, 0, 0, (void *)CAN1, 								recvBuffer, sizeof(recvBuffer), Cus_CanTP_canSendFunc_Asynchronous, indication, NULL);
+    if ( !pConn )
+    {
+      for( ; ; );
+    }
+```
+
 ------
 
+- `Cus_CANTp_Conn_t *Cus_Cantp_CreateTxConnection( ... )`
 
+```c
+  Cus_CANTp_Conn_t *Cus_Cantp_CreateTxConnection( U8 targetAddr, 
+                                                  U8 sourceAddr, 
+                                                  U8 addrMode, 
+                                                  void *canDevice, 
+                                                  Cus_CanTP_CanSendFunc sendFunc, 
+                                                  Cus_CanTP_ErrCallback errCallback );
+```
+
+**参数**：
+
+- (U8) targetAddr：**目标接收方地址**。即数据要发送到的那个节点的地址。在普通寻址模式下，该地址会被映射到 CAN ID 的 TA 字段；在拓展寻址模式下，映射到数据段第一个字节。
+- (U8) sourceAddr：**本机发送方地址**。在普通寻址模式下，该地址会被映射到 CAN ID 的 SA 字段；在拓展寻址模式下，映射到 CAN ID 的对应位段。(Ps : **本机地址一定要正确填写**，接收方回复流控帧时，目标地址（TA）即为此地址。如果填写错误，流控帧将无法被本机正确接收，导致多帧传输超时失败。)
+- (U8) addrMode：**寻址模式**。同上。
+- (void *) canDevice：**绑定的 CAN 外设基址指针**。同上。
+- (Cus_CanTP_CanSendFunc) sendFunc：**底层发送回调函数（必须）**。由用户自行提供实现。
+- (Cus_CanTP_ErrCallback) errCallback：**错误回调（可选，可传 NULL）**。当发送过程出现超时（如 N_Bs 超时、N_As 超时）时，协议栈会调用此回调通知上层。若传入 NULL，则超时后连接将被**静默释放**。
+
+**返回值**：
+
+- NULL：创建失败（连接池已满、参数无效、必要回调缺失）。
+- 非 NULL：（Cus_CANTp_Conn_t * ）成功分配并初始化连接控制块，返回其指针。
+
+**描述**：创建一个 CANTP **发送连接控制块**。若本机在 CANTP 通讯网络中作为需要作为发送端（除回复流控外，还需要主动发起发送请求），则必须创建该发送控制块。该函数从内部连接池中分配一个空闲连接，绑定底层 CAN 设备、配置寻址参数，并设置发送回调函数。与接收连接不同，发送连接不需要用户提供接收缓冲区，因为**流控帧并不携带用户数据**，且接收和解析由协议栈内部自动完成。流控帧解析完毕后不会通知上层。
+
+**功能细节**：	无
+
+**注意事项**：
+
+1.连接创建完毕后，通过 `Cus_Cantp_startTransmit()`请求发起一次 CANTP 传输。 协议栈会自动完成单帧或多帧发送。
+
+2.**接收路径仍是必须**！虽然发送端不直接处理数据接收，但是由于需要接收流控，因此，底层 CAN 接收中断仍需要调用 `Cus_Cantp_RecieveFrame` 将收到的帧喂给协议栈，协议栈会自动匹配到该发送连接并处理流控帧。
+
+**调用示例**：
+
+```c
+    Cus_CANTp_Conn_t *pConn = Cus_Cantp_CreateTxConnection(0x12, 0x18, CANTP_ADDR_MODE_COMMON, (void *)CAN1, 																Cus_CanTP_canSendFunc_Asynchronous, NULL);
+    if ( !pConn )
+    {
+      for( ; ; );
+    }
+```
+
+------
+
+- `S8 Cus_Cantp_startTransmit( Cus_CANTp_Conn_t *pConn, const U8 *data, U32 len )`
+
+```c
+S8 Cus_Cantp_startTransmit( Cus_CANTp_Conn_t *pConn, const U8 *data, U32 len )
+```
+
+**参数**:
+
+- (Cus_CANTp_Conn_t *) pConn：**发起请求的连接控制块**。该连接必须处于空闲状态 (`CONN_IDLE`)，否则函数将返回错误。
+- (const U8 *) data：**待发送数据缓冲区**。
+- (U32) len：**待发送数据的总长度（字节）**。不能为 0。
+
+**返回值:**
+
+-  <= 0：参数无效(-1) ， 连接对应的通道配置无效(-2)或发送请求提交失败(0)。
+- 1：发送请求已提交（单帧或多帧首帧已成功请求 `SendFunc` 发出）。
+
+**描述**：**作为发送端，请求一次 CAN TP 数据发送**。该函数会根据 `len` 的大小，结合当前连接的寻址模式，自动判断采用**单帧 (SF)** 还是**多帧 (FF/CF)** 传输。
+
+**功能细节**：
+
+​	函数内部先校验传入参数的合法性（连接块指针是否非NULL防止空指针解引用，发送数据长度是否非0）。获取连接块对应通道的配置表，通过配置表中的寻址模式计算单帧最大有效载荷。若 `len` 在单帧范围内，调用 `Cus_Cantp_SendSingleFrame` 将数据组装为单帧并通过 `SendFunc` 发出。若 `len` 超过单帧容量，调用 `Cus_Cantp_SendFirstFrame` 组装首帧并通过 `SendFunc` 发出，同时初始化多帧传输相关状态（总长度、剩余字节、SN 序列号等）。
+
+​	首帧发送成功后，协议栈会进入等待流控帧（`CONN_TX_WAIT_FC`）状态，后续由 `Cus_Cantp_MainFunction` 和 `Cus_Cantp_TxConfirmation` 自动推动发送状态机完成连续帧的发送。
+
+**注意事项**：
+
+1.**连接控制块必须处于空闲状态**（`CONN_IDLE`），否则将返回0。
+
+2.发送是**非阻塞**的，本函数及其内部调用函数，仅负责提交发送请求。实际硬件发送完成由中断回调 `Cus_Cantp_TxConfirmation` 通知。在多帧传输中，整个会话由协议栈自动推进，应用层无需轮询。
+
+3.**重要！**启动多帧传输时，该函数内部会记录传入的数据源指针，后续的连续帧(CF)数据段构造将基于该地址进行。因此，**在传输完成之前（收到 `DataIndFunc` 或 `ErrCallback`，或连接回到 IDLE），应用层必须保证 `data` 指向的数据有效且不被修改**。如果数据是栈上临时缓冲区，务必确保在传输完成前不会出栈。
+
+4.多帧传输过程中若发送传输问题（例如 对端SNCode校验失败等），在当前版本下(Ver2.0)会直接将连接置为 IDLE 并结束通信，不会自动重试，也不会通过错误回调通知。此行为在后续版本中可能改进。
+
+**调用示例**：
+
+```c
+S8 ret = Cus_Cantp_startTransmit(pConn, data, sizeof(data));
+```
+
+---
+
+*API Reference v2.0 结束*
 
 ------
 
