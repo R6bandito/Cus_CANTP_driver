@@ -445,7 +445,7 @@ void HAL_CAN_RxFifo0MsgPendingCallback(CAN_HandleTypeDef *hcan)
 **调用示例**：
 
 ```c
-Cus_CANTp_Conn_t *pConn = Cus_Cantp_CreateRxConnection(0x12, CANTP_ADDR_MODE_COMMON, 0, 0, (void *)CAN1, 								recvBuffer, sizeof(recvBuffer), Cus_CanTP_canSendFunc_Asynchronous, indication, NULL);
+Cus_CANTp_Conn_t *pConn = Cus_Cantp_CreateRxConnection(0x12, CANTP_ADDR_MODE_COMMON, 0, 0, (void *)CAN1, recvBuffer, sizeof(recvBuffer), Cus_CanTP_canSendFunc_Asynchronous, indication, NULL);
     if ( !pConn )
     {
       for( ; ; );
@@ -492,7 +492,7 @@ Cus_CANTp_Conn_t *pConn = Cus_Cantp_CreateRxConnection(0x12, CANTP_ADDR_MODE_COM
 **调用示例**：
 
 ```c
-    Cus_CANTp_Conn_t *pConn = Cus_Cantp_CreateTxConnection(0x12, 0x18, CANTP_ADDR_MODE_COMMON, (void *)CAN1, 																Cus_CanTP_canSendFunc_Asynchronous, NULL);
+    Cus_CANTp_Conn_t *pConn = Cus_Cantp_CreateTxConnection(0x12, 0x18, CANTP_ADDR_MODE_COMMON, (void *)CAN1,Cus_CanTP_canSendFunc_Asynchronous, NULL);
     if ( !pConn )
     {
       for( ; ; );
