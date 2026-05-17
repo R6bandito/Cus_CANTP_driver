@@ -192,7 +192,7 @@ void Cus_Cantp_MainFunction( void )
     }
 
     // STmin 延时结束，发送下一帧 CF
-    if ( pConn->Timer_StminDelayOnly == 0 && pConn->CurrentState == CONN_TX_CF ) 
+    if (pConn->Timer_StminDelayOnly == 0 && pConn->CurrentState == CONN_TX_CF) 
     {
       Cus_Cantp_SendNextCF(pConn);
     }
@@ -1134,10 +1134,27 @@ U8 Cus_Cantp_RecieveFrame( const U8 *data, U8 dlc, U32 canid )
     // 检查连接是否匹配.
     if ( Cus_Cantp_VerifyIDConn(pConn, canid, data) && pCfg->N_AI.TA_Type != 1 )
     {
-      // 连接匹配. 调用底层喂帧
-      Cus_Cantp_RxIndication(pConn, canid, data, dlc);
+      // 帧类型判定：取 PCI 字节高 4 位
+      U8 pciByte = (pCfg->AddrMode == NORMAL_ADDRESS_MODE) ? data[0] : data[1];
+
+      // FC 帧：只允许处于等待流控状态的 Tx 连接处理
+      if ((pciByte & 0xF0) == 0x30) 
+      {
+        if (pConn->Tx_or_Rx == 0 && pConn->CurrentState == CONN_TX_WAIT_FC) 
+        {
+            Cus_Cantp_RxIndication(pConn, canid, data, dlc);
+            handled++;
+        }
+        continue;   // FC 帧不 break，继续遍历（可能多个 Tx 等待）
+      }
+
+      /* 既非FC帧. 当前pConn对象又是 Tx. 由于Tx控制块并不注册接收回调. 因此此处打回. */
+      if ( pConn->Tx_or_Rx == 0 )   continue;
+
+      // 非FC帧. 正常分发.
+      Cus_Cantp_RxIndication(pConn, canid, data, dlc);  
       handled++;
-      continue;     // 同一 TA 可能对应有多个连接. 因此此处不直接返回.
+      continue;     
     }
   }
 
@@ -1196,6 +1213,9 @@ Cus_CANTp_Conn_t *Cus_Cantp_CreateRxConnection( U8 ownAddr,
 
   /* 采用连接块ID来对应一张通道表.(一一对应) */
   U8 ChannelIndex = pConn->ConnIndex;
+  pConn->ChannelConfigTabID = pConn->ConnIndex;
+
+  pConn->Tx_or_Rx = 1;
 
   /* 配置通道参数 */
   Cus_Cantp_Config_ChannelMain_Info(addrMode, CLASSIC_CAN_TXDLC, FUNCTIONAL_ID, ChannelIndex);
@@ -1247,6 +1267,9 @@ Cus_CANTp_Conn_t *Cus_Cantp_CreateTxConnection( U8 targetAddr,
 
   /* 获取对应通道ID */ 
   U8 ChannelIndex = pConn->ConnIndex;
+  pConn->ChannelConfigTabID = pConn->ConnIndex;
+
+  pConn->Tx_or_Rx = 0;
 
   /* 配置通道参数 */ 
   Cus_Cantp_Config_ChannelMain_Info(addrMode, CLASSIC_CAN_TXDLC, FUNCTIONAL_ID, ChannelIndex);
@@ -1296,7 +1319,7 @@ static void __cus_initial_Conn( Cus_CANTp_Conn_t *pConn )
   pConn->Timer_N_Cr = 0;
 
   pConn->CurrentState = CONN_IDLE;
-  pConn->ChannelConfigTabID = 0;
+  pConn->ChannelConfigTabID = 0xFF;
   pConn->SendFunc = NULL;
   pConn->RecvFunc = NULL;
   pConn->ErrCallBack = NULL;
@@ -1306,6 +1329,7 @@ static void __cus_initial_Conn( Cus_CANTp_Conn_t *pConn )
   pConn->BindCANDevice = NULL;
   pConn->pSendData = NULL;
   pConn->OriginalTA = 0;
+  pConn->Tx_or_Rx = 0xFF;
 }
 
 

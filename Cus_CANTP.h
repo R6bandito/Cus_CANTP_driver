@@ -147,6 +147,8 @@ struct Cus_CANTP_Conn
   U8 TxMailBoxIndex;        // 通信所用的发送邮箱号.(0/1/2) FF表示初始化误状态. 
   void *BindCANDevice;      // 绑定的底层CAN设备. (请通过类型转换将其转换为 CAN_TypeDef * 形式).
 
+  U8 Tx_or_Rx;              // 0=Tx, 1=RX.
+
   U8 OriginalTA;
 
   Cus_CanTP_CanSendFunc SendFunc;         // 底层 CAN 帧发送.(自实现).异步
