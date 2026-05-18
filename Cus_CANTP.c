@@ -150,13 +150,18 @@ void Cus_Cantp_MainFunction( void )
       if ( pConn->ErrCallBack != NULL )
       {
         // 上层注册了错误回调.调用用户错误处理逻辑.
-        // Ps: 上层错误处理回调中，pConn状态由上层管理！底层将不负责释放和状态抹除.
-        pConn->ErrCallBack(pConn, CUS_CANTP_ERR_NBS_TIMEOUT);  continue;
+        pConn->ErrCallBack(pConn, CUS_CANTP_ERR_NBS_TIMEOUT);  
+
+        /* 为防止用户回调未清理状态导致 无限回调风暴. 此处再次执行释放连接操作. */
+        Cus_Cantp_ReleaseConn(pConn);
+
+        continue;
       }
       else if ( pConn->ErrCallBack == NULL )
       {
         // 未注册上层错误回调.释放控制块. 本次通信结束.
-        Cus_Cantp_ReleaseConn(pConn);   continue;
+        Cus_Cantp_ReleaseConn(pConn);   
+        continue;
       }
     }
 
@@ -165,30 +170,50 @@ void Cus_Cantp_MainFunction( void )
       // （作为接收方）等待发送方连续帧超时.
       if ( pConn->ErrCallBack != NULL )
       {
-        pConn->ErrCallBack(pConn, CUS_CANTP_ERR_NCR_TIMEOUT);   continue;
+        pConn->ErrCallBack(pConn, CUS_CANTP_ERR_NCR_TIMEOUT);   
+        Cus_Cantp_ReleaseConn(pConn);
+        continue;
       }
       else if ( pConn->ErrCallBack == NULL )
       {
-        Cus_Cantp_ReleaseConn(pConn);   continue;
+        Cus_Cantp_ReleaseConn(pConn);  
+        continue;
       }
     }
 
     if ( pConn->Timer_N_As == 0 )
     {
       // 发送确认超时检测
-      if ( (pConn->CurrentState == CONN_TX_FF || pConn->CurrentState == CONN_TX_SF) )
+      if ( (pConn->CurrentState == CONN_TX_FF || pConn->CurrentState == CONN_TX_SF || (pConn->CurrentState == CONN_TX_CF && pConn->TxPendingConfirm) ))
       {
-        if ( pConn->ErrCallBack != NULL ) pConn->ErrCallBack(pConn, CUS_CANTP_ERR_NAS_TIMEOUT);
-        else Cus_Cantp_ReleaseConn(pConn);
-        continue;
+        if ( pConn->ErrCallBack != NULL ) 
+        {
+          pConn->ErrCallBack(pConn, CUS_CANTP_ERR_NAS_TIMEOUT);
+          Cus_Cantp_ReleaseConn(pConn);
+          continue;
+        }
+        else 
+        {
+          Cus_Cantp_ReleaseConn(pConn);
+          continue;
+        }
+        
       }
     }
 
     if ( pConn->Timer_N_Ar == 0 && pConn->CurrentState == CONN_TX_FC )
     {
-      if ( pConn->ErrCallBack != NULL ) pConn->ErrCallBack(pConn, CUS_CANTP_ERR_NAS_TIMEOUT);
-      else Cus_Cantp_ReleaseConn(pConn);
-      continue;
+      if ( pConn->ErrCallBack != NULL ) 
+      {
+        pConn->ErrCallBack(pConn, CUS_CANTP_ERR_NAS_TIMEOUT);
+        Cus_Cantp_ReleaseConn(pConn);
+        continue;
+      }
+      else 
+      {
+        Cus_Cantp_ReleaseConn(pConn);
+        continue;
+      }
     }
 
     // STmin 延时结束，发送下一帧 CF
@@ -239,12 +264,16 @@ void Cus_Cantp_TxConfirmation( void *CanDevice, U8 mailbox )
             // 启动 N_Bs定时器.
             pConn->Timer_N_Bs = TIMER_NBS;
 
+            pConn->TxPendingConfirm = 0;
+
             pConn->Timer_N_As = 0;
           }
           else 
           {
             // 当前BS块还有盈余. 但是STmin 延时已经在 SendNextCF 中处理. 此处仅确认发送成功，无额外操作. 等待触发下一次发送.
             pConn->Timer_N_As = 0;
+
+            pConn->TxPendingConfirm = 0;
           }
           break;
         }
@@ -497,7 +526,7 @@ static U8 Cus_Cantp_SendSingleFrame( Cus_CANTp_Conn_t *pConn, const U8 *data, U8
   Canid = Cus_Cantp_GetCanID(pCfg);
   if ( Canid == 0 )   return 0;
   
-  if ( pConn->SendFunc && pConn->SendFunc(pConn, Canid, buffer, ret_dlc) != 0 )
+  if ( pConn->SendFunc && pConn->SendFunc(pConn, Canid, buffer, ret_dlc) == 1 )
   {
     // 发送成功.
     pConn->Timer_N_As = TIMER_NAS;   // 启动发送确认超时
@@ -527,7 +556,7 @@ static U8 Cus_Cantp_SendFlowControlFrame( Cus_CANTp_Conn_t *pConn, Cus_CANTP_Flo
   U32 Canid = Cus_Cantp_GetCanID(pCfg);
   if ( Canid == 0 )   return 0;
 
-  if ( pConn->SendFunc && pConn->SendFunc(pConn, Canid, Buffer, ret_dlc) != 0 )
+  if ( pConn->SendFunc && pConn->SendFunc(pConn, Canid, Buffer, ret_dlc) == 1 )
   {
     // 发送请求提交完成.
     if ( fs == FLOW_CTS )
@@ -542,6 +571,11 @@ static U8 Cus_Cantp_SendFlowControlFrame( Cus_CANTp_Conn_t *pConn, Cus_CANTP_Flo
       // 传输中止. 此处为了简化，将FLOW_WAIT状态并入FLOW_OVFLW进行处理.
       pConn->CurrentState = CONN_IDLE;
     }
+  }
+  else 
+  {
+    /* 发送请求未提交完成. */
+    return 0;
   }
 
   return 1;
@@ -583,9 +617,10 @@ static U8 Cus_Cantp_SendNextCF( Cus_CANTp_Conn_t *pConn )
     return 0;
   }
 
-  if ( pConn->SendFunc && pConn->SendFunc(pConn, canID, buffer, dlc) )
+  if ( pConn->SendFunc && pConn->SendFunc(pConn, canID, buffer, dlc) == 1 )
   {
     pConn->Timer_N_As = TIMER_NAS;   // 启动发送确认超时
+    pConn->TxPendingConfirm = 1;    
     // 更新发送状态.  
     // Ps: 此处是提交发送后直接进行状态更新,而并非是等底层硬件发送成功. 因此必须保证 用户自身注册的SendFunc在无邮箱可用时立即返回失败(或有对应重试机制)，而不应等待邮箱变空.
     #warning "SendFunc must return failure immediately when no Tx mailbox available.do NOT block waiting."
@@ -1330,6 +1365,8 @@ static void __cus_initial_Conn( Cus_CANTp_Conn_t *pConn )
   pConn->pSendData = NULL;
   pConn->OriginalTA = 0;
   pConn->Tx_or_Rx = 0xFF;
+
+  pConn->TxPendingConfirm = 0;
 }
 
 
@@ -1365,9 +1402,9 @@ static void __cus_reset_conn_tx_state(Cus_CANTp_Conn_t *pConn)
   pConn->Timer_N_As = 0;
   pConn->Timer_N_Bs = 0;
   pConn->Timer_StminDelayOnly = 0;
+  pConn->TxPendingConfirm = 0;
   pConn->STmin = 0;
   pConn->BS = 0;
-  pConn->OriginalTA = 0;
 }
 /* ********************************************** 初始化及状态重置API ****************************************************** */
 /* *********************************************************************************************************************** */
@@ -1432,7 +1469,7 @@ void Cus_Cantp_Config_ChannelMain_Info( U8 addrMode, U8 TxDlc, U32 Function_CanI
   Cus_CANTP_Cfg_t * pCfg = Cus_Cantp_GetChannel(ChannelIndex);
   if ( !pCfg )    return;
 
-  pCfg->AddrMode = addrMode == (NORMAL_ADDRESS_MODE || addrMode == EXT_ADDRESS_MODE || addrMode == MIXED_ADDRESS_MODE) 
+  pCfg->AddrMode = (addrMode == NORMAL_ADDRESS_MODE || addrMode == EXT_ADDRESS_MODE || addrMode == MIXED_ADDRESS_MODE) 
                       ? addrMode : NORMAL_ADDRESS_MODE;
 
   pCfg->FunctionalCanID = Function_CanID;
