@@ -253,26 +253,25 @@ void Cus_Cantp_TxConfirmation( void *CanDevice, U8 mailbox )
 
       case CONN_TX_CF:
         {
-          // 连续帧发送成功. 发送成功相关数据状态由发送API本地更新. 此处不做更新，仅作状态转换.
-          if ( pConn->Remaining == 0 )  pConn->CurrentState = CONN_IDLE;  // 数据发完. 结束掉此次会话.
-
-          if ( pConn->BS > 0 && pConn->RemainingBS == 0 )
+          if ( pConn->Remaining == 0 )
+          {
+            // 连续帧发送成功. 发送成功相关数据状态由发送API本地更新. 此处不做更新，仅作状态转换.
+            pConn->CurrentState = CONN_IDLE;
+            pConn->Timer_N_As = 0;
+            pConn->TxPendingConfirm = 0;
+          }
+          else if ( pConn->BS > 0 && pConn->RemainingBS == 0 )
           {
             // 已成功发完一个BS块. 等待下一个流控.
             pConn->CurrentState = CONN_TX_WAIT_FC;
-
-            // 启动 N_Bs定时器.
             pConn->Timer_N_Bs = TIMER_NBS;
-
             pConn->TxPendingConfirm = 0;
-
             pConn->Timer_N_As = 0;
           }
-          else 
+          else
           {
             // 当前BS块还有盈余. 但是STmin 延时已经在 SendNextCF 中处理. 此处仅确认发送成功，无额外操作. 等待触发下一次发送.
             pConn->Timer_N_As = 0;
-
             pConn->TxPendingConfirm = 0;
           }
           break;
@@ -292,11 +291,12 @@ void Cus_Cantp_TxConfirmation( void *CanDevice, U8 mailbox )
           // 流控帧确认发送成功. 改变状态为 CONN_RX_WAIT_CF. 等待发送方的后续连续帧.
           pConn->CurrentState = CONN_RX_WAIT_CF;
           pConn->Timer_N_Ar = 0;
+          pConn->TxMailBoxIndex = 0xFF;       // 标记为无效. 清除 Rx 控制块由于发送流控而残留得旧邮箱值.
           pConn->Timer_N_Cr = TIMER_NCR;      // 启动NCR. 在 CONN_RX_WAIT_CF 状态下 等待CF.
           break;
         }
 
-      default:    return;
+      default:    continue;
       }
     }
   }
