@@ -259,6 +259,7 @@ void Cus_Cantp_TxConfirmation( void *CanDevice, U8 mailbox )
             pConn->CurrentState = CONN_IDLE;
             pConn->Timer_N_As = 0;
             pConn->TxPendingConfirm = 0;
+            __cus_reset_conn_tx_state(pConn);
           }
           else if ( pConn->BS > 0 && pConn->RemainingBS == 0 )
           {

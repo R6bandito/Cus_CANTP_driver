@@ -55,10 +55,10 @@ typedef struct Cus_CANTP_Conn Cus_CANTp_Conn_t;
   #define EXT_ADDRESS_MODE             (1U)
   #define MIXED_ADDRESS_MODE           (2U)
 
-  #define TIMER_NBS                    (200UL)
-  #define TIMER_NAS                    (100UL)
-  #define TIMER_NAR                    (200UL)
-  #define TIMER_NCR                    (100UL)
+  #define TIMER_NBS                    (1000UL)
+  #define TIMER_NAS                    (500UL)
+  #define TIMER_NAR                    (500UL)
+  #define TIMER_NCR                    (500UL)
 
   #define CLASSIC_CAN_TXDLC            (8)
   #define CANTP_RX_SENDER_ADDR         (0)      // 接收方,SA默认为0.
