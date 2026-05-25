@@ -139,21 +139,32 @@ void Cus_Cantp_HeartTick( void )
 
 void Cus_Cantp_MainFunction( void )
 {
+  uint32_t __basepri;
+
   for( U8 i = 0; i < MAX_SUPPORT_CONN; i++ )
   {
+    Cus_CANTP_MAINFUNC_CRITICAL_ENTER();
     Cus_CANTp_Conn_t *pConn = &ConnPool[i];
-    if ( pConn->CurrentState == CONN_IDLE )   continue;
+    if ( pConn->CurrentState == CONN_IDLE )   
+    {
+      Cus_CANTP_MAINFUNC_CRITICAL_EXIT();
+      continue;
+    }
 
     if ( pConn->Timer_N_Bs == 0 && pConn->CurrentState == CONN_TX_WAIT_FC )
     {
       // 等待流控帧超时.
       if ( pConn->ErrCallBack != NULL )
       {
+        Cus_CANTP_MAINFUNC_CRITICAL_EXIT();
         // 上层注册了错误回调.调用用户错误处理逻辑.
         pConn->ErrCallBack(pConn, CUS_CANTP_ERR_NBS_TIMEOUT);  
 
+        /* 临界区不包括用户回调 */
+        Cus_CANTP_MAINFUNC_CRITICAL_ENTER();
         /* 为防止用户回调未清理状态导致 无限回调风暴. 此处再次执行释放连接操作. */
         Cus_Cantp_ReleaseConn(pConn);
+        Cus_CANTP_MAINFUNC_CRITICAL_EXIT();
 
         continue;
       }
@@ -161,6 +172,7 @@ void Cus_Cantp_MainFunction( void )
       {
         // 未注册上层错误回调.释放控制块. 本次通信结束.
         Cus_Cantp_ReleaseConn(pConn);   
+        Cus_CANTP_MAINFUNC_CRITICAL_EXIT();
         continue;
       }
     }
@@ -170,13 +182,18 @@ void Cus_Cantp_MainFunction( void )
       // （作为接收方）等待发送方连续帧超时.
       if ( pConn->ErrCallBack != NULL )
       {
+        Cus_CANTP_MAINFUNC_CRITICAL_EXIT();
         pConn->ErrCallBack(pConn, CUS_CANTP_ERR_NCR_TIMEOUT);   
+
+        Cus_CANTP_MAINFUNC_CRITICAL_ENTER();
         Cus_Cantp_ReleaseConn(pConn);
+        Cus_CANTP_MAINFUNC_CRITICAL_EXIT();
         continue;
       }
       else if ( pConn->ErrCallBack == NULL )
       {
         Cus_Cantp_ReleaseConn(pConn);  
+        Cus_CANTP_MAINFUNC_CRITICAL_EXIT();
         continue;
       }
     }
@@ -188,16 +205,20 @@ void Cus_Cantp_MainFunction( void )
       {
         if ( pConn->ErrCallBack != NULL ) 
         {
+          Cus_CANTP_MAINFUNC_CRITICAL_EXIT();
           pConn->ErrCallBack(pConn, CUS_CANTP_ERR_NAS_TIMEOUT);
+
+          Cus_CANTP_MAINFUNC_CRITICAL_ENTER();
           Cus_Cantp_ReleaseConn(pConn);
+          Cus_CANTP_MAINFUNC_CRITICAL_EXIT();
           continue;
         }
         else 
-        {
+        { 
           Cus_Cantp_ReleaseConn(pConn);
+          Cus_CANTP_MAINFUNC_CRITICAL_EXIT();
           continue;
         }
-        
       }
     }
 
@@ -205,13 +226,18 @@ void Cus_Cantp_MainFunction( void )
     {
       if ( pConn->ErrCallBack != NULL ) 
       {
+        Cus_CANTP_MAINFUNC_CRITICAL_EXIT();
         pConn->ErrCallBack(pConn, CUS_CANTP_ERR_NAS_TIMEOUT);
+
+        Cus_CANTP_MAINFUNC_CRITICAL_ENTER();
         Cus_Cantp_ReleaseConn(pConn);
+        Cus_CANTP_MAINFUNC_CRITICAL_EXIT();
         continue;
       }
       else 
       {
         Cus_Cantp_ReleaseConn(pConn);
+        Cus_CANTP_MAINFUNC_CRITICAL_EXIT();
         continue;
       }
     }
@@ -219,8 +245,19 @@ void Cus_Cantp_MainFunction( void )
     // STmin 延时结束，发送下一帧 CF
     if (pConn->Timer_StminDelayOnly == 0 && pConn->CurrentState == CONN_TX_CF) 
     {
-      Cus_Cantp_SendNextCF(pConn);
+      while( Cus_Cantp_SendNextCF(pConn) )
+      {
+        /* 数据发完 返回. */
+        if ( pConn->Remaining == 0 )    break;
+
+        /* 达到流控BS上限，等待下一个 FC. */
+        if ( pConn->BS > 0 && pConn->RemainingBS == 0 )   break;
+
+        /* 等待下一个 STmin. */
+        if ( pConn->Timer_StminDelayOnly > 0 )  break;
+      }
     }
+    Cus_CANTP_MAINFUNC_CRITICAL_EXIT();
   }
 }
 
@@ -228,6 +265,8 @@ void Cus_Cantp_MainFunction( void )
 
 void Cus_Cantp_TxConfirmation( void *CanDevice, U8 mailbox )
 {
+  U32 basepri;
+  basepri = Cus_CANTP_ENTER_CRITICAL_FROM_ISR();
   for(U8 i = 0; i < MAX_SUPPORT_CONN; i++ )
   {
     Cus_CANTp_Conn_t *pConn = &ConnPool[i];
@@ -301,6 +340,8 @@ void Cus_Cantp_TxConfirmation( void *CanDevice, U8 mailbox )
       }
     }
   }
+
+  Cus_CANTP_EXIT_CRITICAL_FROM_ISR(basepri);
 }
 
 
@@ -311,6 +352,7 @@ static void Cus_Cantp_RxIndication( Cus_CANTp_Conn_t *pConn, U32 canId, const U8
         || pConn->ChannelConfigTabID >= CHANNEL_CONFIG_TABLE_COUNT 
           || pConn->ConnIndex >= MAX_SUPPORT_CONN )   return;   // 由于填充机制. 所有小于8的帧都将自动填充到8字节. 因此dlc必须 >= 8.
 
+  U32 basepri;
   if ( dlc == 8 )
   {
     // 经典CAN处理方式. 非CAN FD.
@@ -357,6 +399,7 @@ static void Cus_Cantp_RxIndication( Cus_CANTp_Conn_t *pConn, U32 canId, const U8
 /* 获取空闲连接控制块 */
 static Cus_CANTp_Conn_t *Cus_Cantp_GetIdleConn( void )
 {
+  Cus_CANTP_ENTER_CRITICAL();
   for( U8 i = 0; i < MAX_SUPPORT_CONN; i++ )
   {
     if ( ConnPool[i].ConnIndex == -1 && ConnPool[i].CurrentState == CONN_IDLE )    // 找到空闲块. 返回地址.
@@ -368,9 +411,11 @@ static Cus_CANTp_Conn_t *Cus_Cantp_GetIdleConn( void )
       Cus_Cantp_RestoreChannekConfig(i);
 
       ConnPool[i].ConnIndex = i;
+      Cus_CANTP_EXIT_CRITICAL();
       return &ConnPool[i];
     }
   }
+  Cus_CANTP_EXIT_CRITICAL();
 
   return NULL;        // 所以通道都有活跃会话. 返回NULL.
 }
@@ -642,8 +687,8 @@ static U8 Cus_Cantp_SendNextCF( Cus_CANTp_Conn_t *pConn )
   }
   else 
   {
-    // 发送失败.
-    pConn->CurrentState = CONN_IDLE;
+    /* 请求失败. 返回. */
+    /* 请求失败是正常现象，表明当前硬件发送邮箱已满或发送错误. 返回由上层进行处理 */
     return 0;
   }
 
@@ -1095,6 +1140,7 @@ static void Cus_Cantp_ProcessFC(Cus_CANTp_Conn_t *pConn, const U8 *data, U8 dlc)
                || pConn->ConnIndex >= MAX_SUPPORT_CONN || !data )   return;
 
   (void) dlc;   // FC帧不携带用户数据. 所以无论是经典CAN还是CAN FD处理方式是一样的. 此处dlc参数仅作为预留拓展接口占位.
+  uint32_t basepri;
 
   if ( pConn->CurrentState != CONN_TX_WAIT_FC )   return;   // 状态不对返回. 接收流控只针对作为发送方(Sender)而言.
 
@@ -1121,13 +1167,13 @@ static void Cus_Cantp_ProcessFC(Cus_CANTp_Conn_t *pConn, const U8 *data, U8 dlc)
 
   switch ((Cus_CANTP_FlowState_t)FlowState)
   {
-  case FLOW_CTS:  pConn->CurrentState = CONN_TX_CF; pCfg->N_AI.TA = pConn->OriginalTA; break;   // 转换状态. 开启CF发送. 
+    case FLOW_CTS:  pConn->CurrentState = CONN_TX_CF; pCfg->N_AI.TA = pConn->OriginalTA; break;   // 转换状态. 开启CF发送. 
 
-  case FLOW_OVFLW: pConn->CurrentState = CONN_IDLE; break;    // 中止传输.
+    case FLOW_OVFLW: pConn->CurrentState = CONN_IDLE; break;    // 中止传输.
 
-  case FLOW_WAIT: pConn->CurrentState = CONN_IDLE;  break;    // 此处为简化处理，暂时将WAIT与OVFLW合并处理.
-  
-  default:    return;
+    case FLOW_WAIT: pConn->CurrentState = CONN_IDLE;  break;    // 此处为简化处理，暂时将WAIT与OVFLW合并处理.
+    
+    default:    break;
   }
 }
 /* ********************************************** 帧处理API ****************************************************** */
@@ -1142,26 +1188,47 @@ U8 Cus_Cantp_RecieveFrame( const U8 *data, U8 dlc, U32 canid )
   if ( !data || dlc < 8 || canid == 0 )   return 0;   // 由于CANTP中间层采用填充机制. 因此帧构造时，数据场不足8字节的均会填补到8字节. dlc不足8字节的CAN帧不符合协议规定，忽略.
 
   U8 handled = 0;
+  uint32_t basepri; 
 
   // 对该帧进行连接分配. 
   for( U8 i = 0; i < MAX_SUPPORT_CONN; i++ )
   {
+    /* 每次循环都进临界段. 每次continue前都释放临界段，保证正确分发和匹配 */
+    basepri = Cus_CANTP_ENTER_CRITICAL_FROM_ISR();
+
     Cus_CANTp_Conn_t *pConn = &ConnPool[i];
     Cus_CANTP_Cfg_t *pCfg = Cus_Cantp_GetChannel(pConn->ChannelConfigTabID);
-    if ( !pCfg )  continue;
+    if ( !pCfg )  
+    {
+      Cus_CANTP_EXIT_CRITICAL_FROM_ISR(basepri);
+      continue;
+    }
 
-    if ( pConn->ConnIndex < 0 )   continue;     // 该连接控制块为未分配状态.
+    if ( pConn->ConnIndex < 0 )   
+    {
+      Cus_CANTP_EXIT_CRITICAL_FROM_ISR(basepri);
+      continue;     // 该连接控制块为未分配状态.
+    }
 
     if ( pCfg->N_AI.TA_Type == 1 )      // 功能寻址模式. 将该帧向每个使用功能寻址的节点进行分发.
     {
-      if ( canid != pCfg->FunctionalCanID ) continue;   // CANID不匹配功能地址. 跳过.
+      if ( canid != pCfg->FunctionalCanID ) 
+      {
+        Cus_CANTP_EXIT_CRITICAL_FROM_ISR(basepri);
+        continue;   // CANID不匹配功能地址. 跳过.
+      }
 
       if ( pCfg->AddrMode == EXT_ADDRESS_MODE )
       {
         // 对于拓展寻址模式下. 还需要检查数据段第一个字节是否为TA.
-        if ( data[0] != pCfg->N_AI.TA )  continue;
+        if ( data[0] != pCfg->N_AI.TA )  
+        {
+          Cus_CANTP_EXIT_CRITICAL_FROM_ISR(basepri);
+          continue;
+        }
       }
 
+      Cus_CANTP_EXIT_CRITICAL_FROM_ISR(basepri);
       Cus_Cantp_RxIndication(pConn, canid, data, dlc);
       handled++;
       continue;      // 功能寻址可能多个连接同时匹配，不能 break，继续遍历.
@@ -1174,26 +1241,36 @@ U8 Cus_Cantp_RecieveFrame( const U8 *data, U8 dlc, U32 canid )
       U8 pciByte = (pCfg->AddrMode == NORMAL_ADDRESS_MODE) ? data[0] : data[1];
 
       // FC 帧：只允许处于等待流控状态的 Tx 连接处理
-      if ((pciByte & 0xF0) == 0x30) 
+      if ( (pciByte & 0xF0) == 0x30 ) 
       {
         if (pConn->Tx_or_Rx == 0 && pConn->CurrentState == CONN_TX_WAIT_FC) 
         {
-            Cus_Cantp_RxIndication(pConn, canid, data, dlc);
-            handled++;
+          Cus_Cantp_RxIndication(pConn, canid, data, dlc);
+          handled++;
         }
+
+        Cus_CANTP_EXIT_CRITICAL_FROM_ISR(basepri);
         continue;   // FC 帧不 break，继续遍历（可能多个 Tx 等待）
       }
 
       /* 既非FC帧. 当前pConn对象又是 Tx. 由于Tx控制块并不注册接收回调. 因此此处打回. */
-      if ( pConn->Tx_or_Rx == 0 )   continue;
+      if ( pConn->Tx_or_Rx == 0 )   
+      {
+        Cus_CANTP_EXIT_CRITICAL_FROM_ISR(basepri);
+        continue;
+      }
 
-      // 非FC帧. 正常分发.
+      // 非FC帧 非Tx. 正常分发.
+      Cus_CANTP_EXIT_CRITICAL_FROM_ISR(basepri);
       Cus_Cantp_RxIndication(pConn, canid, data, dlc);  
       handled++;
       continue;     
     }
+
+    Cus_CANTP_EXIT_CRITICAL_FROM_ISR(basepri);
   }
 
+  Cus_CANTP_EXIT_CRITICAL_FROM_ISR(basepri);
   return handled;
 }
 
@@ -1262,7 +1339,10 @@ Cus_CANTp_Conn_t *Cus_Cantp_CreateRxConnection( U8 ownAddr,
   if ( !hReturn )  
   {
     /* 缓冲区注册失败. 将已分配的连接释放 */ 
+    Cus_CANTP_ENTER_CRITICAL();
     Cus_Cantp_ReleaseConn(pConn);
+    Cus_CANTP_EXIT_CRITICAL();
+
     return NULL;
   }
 

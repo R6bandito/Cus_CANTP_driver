@@ -7,7 +7,9 @@
 
 #include <stdlib.h>
 #include <string.h>
+#include "stm32f1xx.h"
 #include "Cus_CANTP_cfg.h"
+#include "Cus_CANTP_port.h"
 
 #define USE_CANTP_UTILIS             (0)
   #if (USE_CANTP_UTILIS)
@@ -39,9 +41,27 @@ typedef struct Cus_CANTP_Conn Cus_CANTp_Conn_t;
 
 /*  ---------------------------------------------------  */
   #define API_USE_LEGACY               (0)
+  #define IS_MAINFUNCTION_IN_ISR       (1)
 /*  ---------------------------------------------------  */
 
+  #define Cus_CANTP_ENTER_CRITICAL()                  Cus_CANTP_Port_EnterCritical()
+  #define Cus_CANTP_EXIT_CRITICAL()                   Cus_CANTP_Port_ExitCritical()
+  #define Cus_CANTP_ENTER_CRITICAL_FROM_ISR()         Cus_CANTP_Port_EnterCritical_FromISR()
+  #define Cus_CANTP_EXIT_CRITICAL_FROM_ISR(state)     Cus_CANTP_Port_ExitCritical_FromISR(state)
 
+
+  /* 由于 MainFunction 的位置可能放在ISR中也可能被放在任务中，因此该情况用宏特殊列出 */
+  #if (IS_MAINFUNCTION_IN_ISR)
+    #define Cus_CANTP_MAINFUNC_CRITICAL_ENTER() \
+        __basepri = Cus_CANTP_ENTER_CRITICAL_FROM_ISR()
+    #define Cus_CANTP_MAINFUNC_CRITICAL_EXIT() \
+        Cus_CANTP_EXIT_CRITICAL_FROM_ISR(__basepri)
+  #else
+    #define Cus_CANTP_MAINFUNC_CRITICAL_ENTER() \
+        Cus_CANTP_ENTER_CRITICAL()
+    #define Cus_CANTP_MAINFUNC_CRITICAL_EXIT() \
+        Cus_CANTP_EXIT_CRITICAL()
+  #endif
 
 /*  ---------------------------------------------------  */
   #define MAX_SUPPORT_CONN             (4U)
@@ -55,10 +75,10 @@ typedef struct Cus_CANTP_Conn Cus_CANTp_Conn_t;
   #define EXT_ADDRESS_MODE             (1U)
   #define MIXED_ADDRESS_MODE           (2U)
 
-  #define TIMER_NBS                    (1000UL)
-  #define TIMER_NAS                    (500UL)
-  #define TIMER_NAR                    (500UL)
-  #define TIMER_NCR                    (500UL)
+  #define TIMER_NBS                    (200UL)
+  #define TIMER_NAS                    (100UL)
+  #define TIMER_NAR                    (200UL)
+  #define TIMER_NCR                    (100UL)
 
   #define CLASSIC_CAN_TXDLC            (8)
   #define CANTP_RX_SENDER_ADDR         (0)      // 接收方,SA默认为0.
@@ -117,42 +137,42 @@ typedef enum
 
 struct Cus_CANTP_Conn
 {
-  Cus_CANTP_State_t CurrentState;     // 当前状态.
+  volatile Cus_CANTP_State_t CurrentState;    // 当前状态.
 
-  U32 TxBytes;              // 已经发送的数据(字节).
-  const U8 *pSendData;      // 待发送的原始数据.
-  U32 RxBytes;              // 已接收到的数据(字节).
-  U8 SN_Code;               // SN序列码.
-  U32 TotalSize;            // 该此会话 数据总长度.
-  U32 Remaining;            // 剩余要发送的字节.
+  volatile U32 TxBytes;                   // 已经发送的数据(字节).
+  const U8 *pSendData;                    // 待发送的原始数据.
+  volatile U32 RxBytes;                   // 已接收到的数据(字节).
+  volatile U8 SN_Code;                    // SN序列码.
+  volatile U32 TotalSize;                 // 该此会话 数据总长度.
+  volatile U32 Remaining;                 // 剩余要发送的字节.
 
-  U8 STmin;                 // 流控参数. STmin.
-  U16 Timer_StminDelayOnly; // STmin 延迟计数器.
-  U8 BS;                    // 流控参数. BS.
-  U16 RemainingBS;           // 当前块内还可以连续发送的 CF 数量.
+  volatile U8 STmin;                     // 流控参数. STmin.
+  volatile U16 Timer_StminDelayOnly;     // STmin 延迟计数器.
+  volatile U8 BS;                        // 流控参数. BS.
+  volatile U16 RemainingBS;              // 当前块内还可以连续发送的 CF 数量.
 
-  U32 Timer_N_As;           // 发送方帧发送确认超时计时器.
-  U32 Timer_N_Bs;           // 发送方等待流控帧超时计时器.
-  U32 Timer_N_Ar;           // 接收方帧发送确认超时计时器.
-  U32 Timer_N_Cr;           // 接收方等待连续帧超时计时器.
+  volatile U32 Timer_N_As;               // 发送方帧发送确认超时计时器.
+  volatile U32 Timer_N_Bs;               // 发送方等待流控帧超时计时器.
+  volatile U32 Timer_N_Ar;               // 接收方帧发送确认超时计时器.
+  volatile U32 Timer_N_Cr;               // 接收方等待连续帧超时计时器.
 
-  U8 *pRecvBuffer;          // 接收缓冲区.
-  U32 RecvBuffer_Size;      // 缓冲区大小.
-  U32 RxPos;                // 已接收数据长度(RecvBuf中下一个写入位置).
-  U32 TxPos;                // 发送偏移量.
+  U8 *pRecvBuffer;                       // 接收缓冲区.
+  U32 RecvBuffer_Size;                   // 缓冲区大小. 
+  volatile U32 RxPos;                    // 已接收数据长度(RecvBuf中下一个写入位置).
+  volatile U32 TxPos;                    // 发送偏移量.
 
-  S8 ConnIndex;             // 所属资源池ID.
-  U8 ChannelConfigTabID;    // 通道配置表ID.
+  volatile S8 ConnIndex;                 // 所属资源池ID.
+  U8 ChannelConfigTabID;                 // 通道配置表ID.
 
-  U8 TxMailBoxIndex;        // 通信所用的发送邮箱号.(0/1/2) FF表示初始化误状态. 
-  void *BindCANDevice;      // 绑定的底层CAN设备. (请通过类型转换将其转换为 CAN_TypeDef * 形式).
+  volatile U8 TxMailBoxIndex;            // 通信所用的发送邮箱号.(0/1/2) FF表示初始化误状态. 
+  void *BindCANDevice;                   // 绑定的底层CAN设备. (请通过类型转换将其转换为 CAN_TypeDef * 形式).
 
-  U8 TxPendingConfirm;        // 1=有帧等待底层发送确认, 0=空闲/已确认   (该标志用于标识发送连续帧时，是否有 CF 帧在等待硬件确认)
+  volatile U8 TxPendingConfirm;          // 1=有帧等待底层发送确认, 0=空闲/已确认   (该标志用于标识发送连续帧时，是否有 CF 帧在等待硬件确认)
 
   U8 Tx_or_Rx;              // 0=Tx, 1=RX.
   U8 OriginalTA;
 
-  Cus_CanTP_CanSendFunc SendFunc;         // 底层 CAN 帧发送.(自实现).异步
+  Cus_CanTP_CanSendFunc SendFunc;         // 底层 CAN 帧发送.(自实现).异步 
   Cus_CanTP_CanRecvFunc RecvFunc;         // 底层 CAN 帧接收.
   Cus_CanTP_DataIndication DataIndFunc;   // 上层数据通知回调.
   Cus_CanTP_ErrCallback ErrCallBack;      // 上层错误通知回调.
